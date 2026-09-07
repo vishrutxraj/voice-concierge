@@ -9,8 +9,8 @@ Handles *"where is my order"*, rescheduling, and address correction across
 Indian languages — and hands a frustrated caller to a human before they have
 to ask twice.
 
-Built API-first, so it runs identically on a laptop, in CI, and on Hugging
-Face Spaces, with **no paid dependency required to run it.**
+Built API-first, so it runs identically on a laptop, in CI, and deployed —
+with **no paid dependency required to develop, test, or run the whole suite.**
 
 **Status: all 7 build phases complete.** 227 tests, zero API spend to run
 any of them. See [Build phases](#build-phases) for what shipped when, and
@@ -423,33 +423,34 @@ railway up
 #   set ORDER_API_BASE_URL to the Vercel deployment URL
 ```
 
-### Hugging Face Spaces (free-forever fallback)
+### Hugging Face Spaces — not currently deployed here, and not actually free
 
-```bash
-# Create a Space (Docker SDK) on huggingface.co, then:
-git remote add space https://huggingface.co/spaces/<you>/<space-name>
-git push space main
-```
+`deploy/hf-space/README.md` (frontmatter: `sdk: docker`, `app_port: 7860`)
+documents the intent, but a Space actually needs that file — plus a
+`Dockerfile` — at the *repository root*, with no configurable path. That's a
+different layout from this repo's own root (which needs its real README
+there, not Space config), so deploying here means pushing a purpose-built
+file set (root Dockerfile + Space README, both copies of what's already in
+this repo, plus the same source tree) via the Hugging Face API, not a plain
+`git push` of this repository as-is. Neither of those root-level copies is
+committed to this repo, on purpose — see below for why it was never
+actually pushed.
 
-`deploy/hf-space/README.md`'s frontmatter (`sdk: docker`, `app_port: 7860`)
-is what Spaces reads to build `services/gateway/Dockerfile` — nothing extra
-to configure there.
-
-Two ways to run, both fully supported by the same image (choose via the
-Space's **Settings → Repository secrets**):
-
-1. **Self-contained, no secrets required.** Leave `ORDER_API_BASE_URL`
-   unset — the gateway falls back to `InProcessOrderClient`, seeded with the
-   same fixture data used locally and in CI. This is what makes "no paid
-   dependency required" true for a Spaces demo, not just a laptop. Writes
-   are in-memory and reset when the Space restarts — fine for a demo, not
-   for anything real.
-2. **Full split, matching production.** Deploy `services/order-api` to
-   Vercel first and set `ORDER_API_BASE_URL` as a Space secret. Writes then
-   actually persist via Upstash, matching the real Railway→Vercel topology.
-
-Add `SARVAM_API_KEY`/`GROQ_API_KEY` as secrets for live speech and real
-routing; leave them unset and it still runs entirely on mocks.
+This project does **not** actually deploy there, because — confirmed by
+actually trying, not assumed from the project's own earlier claims —
+**Hugging Face now requires a PRO
+subscription to run a Docker (or Gradio) Space at all, even on the free
+`cpu-basic` hardware tier.** Only *static* (plain HTML) Spaces remain free,
+which doesn't fit a FastAPI backend. This directly contradicts what this
+README used to say ("free-forever fallback," "no paid dependency") — that
+claim was true when written and stopped being true at some point before
+this was actually checked live. Vercel + Railway above is the real,
+complete, live deployment; HF Spaces was going to be a free backup for after
+Railway's trial lapses, and isn't one anymore unless you're already on HF
+PRO. If you are, the same Dockerfile and both run-modes described in
+CLAUDE.md's phase 7 notes still apply — self-contained (no
+`ORDER_API_BASE_URL`, in-process fallback) or pointed at the live Vercel
+URL, same as Railway.
 
 <details>
 <summary><b>Verify with a real request, not just a green healthcheck — here's why that matters</b></summary>
@@ -538,7 +539,7 @@ and the content-hash cache makes even that spend mostly one-time.
 | Vercel (order API, hobby) | ₹0 |
 | Upstash Redis (free tier) | ₹0 |
 | Railway | $5 trial / 30 days, then $5/mo Hobby |
-| Hugging Face Spaces (gateway fallback) | ₹0, no expiry |
+| Hugging Face Spaces (gateway fallback) | **Not actually free** — Docker/Gradio Spaces now require HF PRO even on `cpu-basic`; see "Deploying" |
 | Groq (LLM) | Free tier |
 | Sarvam STT | ₹30/hour of audio |
 | Sarvam TTS | Bulbul v2 ₹15/10k chars (dev) · v3 ₹30/10k chars (demo) |
@@ -551,8 +552,9 @@ costs money exactly once, ever; every call after that is a filesystem read.
 
 Railway's trial is $5 for 30 days, then $5/month Hobby. Choosing SQLite over
 Postgres for the checkpointer keeps the gateway to a single service, which
-is what makes that tier sufficient — and HF Spaces is a free-forever
-fallback on the same image if the budget disappears entirely.
+is what makes that tier sufficient on its own — there's no free-forever
+fallback for the gateway once the trial lapses; see "Deploying" for why HF
+Spaces no longer fills that role.
 
 ---
 
@@ -589,7 +591,7 @@ tests/                       runs against all of the above, offline, no deployme
 | 4 | WebSocket audio, streaming, barge-in | ✅ |
 | 5 | Guardrails (input/output moderation), bias/fairness eval across languages | ✅ |
 | 6 | Gradio harness, real ASR eval fixtures, docs | ✅ |
-| 7 | Deploy to HF Spaces | ✅ |
+| 7 | Deploy live (Vercel + Railway) — the plan named HF Spaces too, dropped once it turned out not to be free anymore | ✅ |
 
 ---
 

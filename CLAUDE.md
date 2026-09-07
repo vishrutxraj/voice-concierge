@@ -24,16 +24,17 @@ things are built the way they are, not just what exists.
 4. WebSocket audio, streaming, barge-in                           ✅
 5. Guardrails (input/output moderation), bias/fairness eval       ✅
 6. Gradio test harness, real ASR eval fixtures, docs              ✅
-7. Deploy to HF Spaces                                            ✅
+7. Deploy live                                                    ✅
 ```
 
-All 7 phases built and verified. What "verified" means for phase 7
-specifically: the Dockerfile builds and a real container answers real
-requests correctly (confirmed locally — see the phase 7 bug entry below).
-Actually pushing to a live Space is the one remaining action that needs a
-Hugging Face account, which isn't something to do without being asked — see
-README.md's "Deploying to Hugging Face Spaces" section for the exact steps
-once that's wanted.
+All 7 phases built and verified — and phase 7 is actually deployed, not
+just Docker-verified locally: order-api on Vercel (Upstash-backed) and the
+gateway on Railway, pointed at each other, both confirmed with real
+requests (see README.md's live URLs near the top). The plan named HF Spaces
+as a third target; that got dropped for a verified, non-hypothetical
+reason, not left undone — see the HF Spaces entry near the end of "Bugs
+already found" below before assuming it's still just a free fallback
+waiting to be pushed to.
 
 227 tests pass, offline, with zero credentials. **If a test needs a live API
 key, the test is wrong** — this has been a hard rule since phase 0 and every
@@ -383,26 +384,35 @@ Fixed the Dockerfile bug in the "Bugs already found" section above (bundled
 `gateway:ci` locally, checking the actual JSON response, not just that
 `/health` returned 200. Strengthened `.github/workflows/ci.yml`'s
 `gateway-image` job the same way — it only ever checked `/health` before,
-which is exactly how the bundling bug went undetected. README.md's
-"Deploying to Hugging Face Spaces" section documents both supported
-topologies (self-contained in-process fallback, or the full Vercel-backed
-split) and which secrets each needs.
+which is exactly how the bundling bug went undetected.
 
-**Update: the full split is now actually live**, not just Docker-verified
-locally -- order-api on Vercel (Upstash-backed, real persistence confirmed
-with a genuine write-then-read-back cycle) and the gateway on Railway
-(pointed at the live Vercel URL via `ORDER_API_BASE_URL`, `SARVAM_API_KEY`
-set too). See README.md's live URLs near the top. Getting there for real
-surfaced three more genuine bugs beyond the Docker one, all logged above in
-"Bugs already found": two stale Vercel `vercel.json` config issues
-(`runtime`/`memory` fields, then a `rewrites` rule) and one real application
-bug (`ensure_order_id` not handling `OrderAPIUnavailable`, caught by an
-actual Vercel cold start on the first live cross-service request). None of
-the four were guessable from local dev/CI alone -- each needed the real
-deployed thing to actually exist before it could surface. HF Spaces is the
-one target NOT yet actually deployed (still needs the user's HF account);
-everything else -- Vercel, Railway, and every fix along the way -- is done
-and verified live, not just locally.
+**The full split is actually live**, not just Docker-verified locally --
+order-api on Vercel (Upstash-backed, real persistence confirmed with a
+genuine write-then-read-back cycle) and the gateway on Railway (pointed at
+the live Vercel URL via `ORDER_API_BASE_URL`, `SARVAM_API_KEY` set too). See
+README.md's live URLs near the top. Getting there for real surfaced three
+more genuine bugs beyond the Docker one, all logged above in "Bugs already
+found": two stale Vercel `vercel.json` config issues (`runtime`/`memory`
+fields, then a `rewrites` rule) and one real application bug
+(`ensure_order_id` not handling `OrderAPIUnavailable`, caught by an actual
+Vercel cold start on the first live cross-service request). None of the
+four were guessable from local dev/CI alone -- each needed the real
+deployed thing to actually exist before it could surface.
+
+**HF Spaces was attempted and deliberately dropped, not left undone.**
+Building the deploy package (a Space needs `Dockerfile` + a frontmatter'd
+`README.md` at ITS OWN repo root, which this repo's actual root can't
+double as without wrecking the GitHub README -- so it's a purpose-built
+file set pushed via the `huggingface_hub` API, not a plain `git push` of
+this repo) went fine. Creating the Space itself failed: `HfApi().create_repo(...,
+repo_type="space", space_sdk="docker")` returned `402 Payment Required` --
+Hugging Face now requires a PRO subscription to run ANY Docker or Gradio
+Space, even on free `cpu-basic` hardware; only static (HTML) Spaces are
+still free. This directly contradicts what this project's own README and
+cost model said before anyone actually tried to create the Space live. User
+chose to skip it rather than subscribe. README.md and the cost model table
+are corrected accordingly -- don't re-add "HF Spaces is a free fallback"
+anywhere without re-verifying HF's current pricing first.
 
 Two honest, still-open gaps outside the 7-phase scope, not silently
 resolved: `fixtures/fairness/`'s corpus (real in-domain per-language
