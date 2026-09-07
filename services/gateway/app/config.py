@@ -43,9 +43,21 @@ class Settings(BaseSettings):
     sarvam_asr_model: str = "saaras:v3"
     sarvam_asr_mode: str = "translate"  # -> English regardless of input language
     groq_asr_model: str = "whisper-large-v3-turbo"
-    # LLM
-    groq_llm_model: str = "llama-3.3-70b-versatile"
-    groq_llm_fast_model: str = "llama-3.1-8b-instant"
+    # LLM — verified live against a real account's GET /v1/models (2026-09),
+    # not docs: llama-3.3-70b-versatile and llama-3.1-8b-instant (this
+    # project's previous defaults) are BOTH gone from the actual roster now,
+    # despite still showing in some cached doc pages -- account-scoped
+    # /models is ground truth, a docs page can be stale. Confirmed working
+    # with this project's exact router.py prompt + json_mode=True (no
+    # <think>-token leakage into the JSON, which a plain unconstrained call
+    # to these newer reasoning-style models WILL produce -- response_format:
+    # json_object is what keeps output clean, already set when json_mode is
+    # requested, see llm_client.py).
+    groq_llm_model: str = "openai/gpt-oss-20b"
+    # Was llama-3.1-8b-instant, also gone; kept distinct from groq_llm_model
+    # for whenever something actually reads it, but note it's not wired to
+    # any call site today (only groq_llm_model is) -- see CLAUDE.md.
+    groq_llm_fast_model: str = "openai/gpt-oss-20b"
     # TTS. bulbul:v2 (originally used here for dev, at half v3's per-character
     # rate) is now REMOVED, not just legacy -- confirmed live: Sarvam rejects
     # it outright with "Model 'bulbul:v2' has been deprecated. Please use

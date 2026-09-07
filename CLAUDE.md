@@ -266,6 +266,31 @@ for the specifics.
   provider) call fails with an opaque error, read the actual response body
   before guessing -- `raise_for_status()` alone throws away the message
   that would have explained it in one line.**
+- Phase 7 (turning on the real Groq LLM for the first time): the SAME class
+  of bug as bulbul:v2, on a different provider, caught the same way -- by
+  the app's own live `validate_roster()` check, not by trusting docs.
+  `groq_llm_model` (`llama-3.3-70b-versatile`) and `groq_llm_fast_model`
+  (`llama-3.1-8b-instant`) were BOTH gone from the real account's
+  `GET /v1/models` the moment a real key was added, despite one Groq docs
+  page (fetched live, same day) still listing both in a "Production Models"
+  table -- account-scoped `/models` is ground truth; a docs page can be
+  stale or simply wrong. Also worth recording: the replacement models
+  (`openai/gpt-oss-20b`, `qwen/qwen3.6-27b`, etc.) are reasoning-style
+  models that emit `<think>...</think>` preamble on a plain unconstrained
+  call -- would have silently broken `router.py`'s `json.loads(response.text)`.
+  Verified before picking one: `response_format: {"type": "json_object"}`
+  (already sent whenever `complete(..., json_mode=True)` is called -- see
+  `llm_client.py`) keeps the output clean JSON with no leakage, confirmed
+  against this project's actual router prompt, not a generic test message.
+  Fixed by moving `groq_llm_model` to `openai/gpt-oss-20b`, verified against
+  a live `validate_roster()` pass and a real `run_turn()` call end to end
+  (`"when will my delivery arrive"` correctly classified `order_lookup` at
+  0.95 confidence -- a phrase the mock's keyword list would likely have
+  missed, real evidence the real LLM is actually being used, not just
+  configured). **Whenever you add credentials for a provider that was
+  previously running on mocks, re-verify its configured model IDs against a
+  live account before trusting they still work -- this is now the second
+  provider roster that rotated out from under this project's own defaults.**
 
 ## Working conventions
 
