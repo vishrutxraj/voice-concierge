@@ -22,3 +22,6 @@ fixtures/audio/*.wav
 *.db
 contracts/*.json
 data/checkpoints.db
+# Vercel's installCommand (services/order-api/vercel.json) copies this in at
+# build time -- packages/order-contracts stays the one source of truth.
+services/order-api/order_contracts/
