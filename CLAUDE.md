@@ -388,9 +388,21 @@ which is exactly how the bundling bug went undetected. README.md's
 topologies (self-contained in-process fallback, or the full Vercel-backed
 split) and which secrets each needs.
 
-Pushing to an actual live Space needs the user's Hugging Face account — not
-something to do unprompted. That's the one remaining action across all 7
-phases; everything else is built, tested, and locally verified end to end.
+**Update: the full split is now actually live**, not just Docker-verified
+locally -- order-api on Vercel (Upstash-backed, real persistence confirmed
+with a genuine write-then-read-back cycle) and the gateway on Railway
+(pointed at the live Vercel URL via `ORDER_API_BASE_URL`, `SARVAM_API_KEY`
+set too). See README.md's live URLs near the top. Getting there for real
+surfaced three more genuine bugs beyond the Docker one, all logged above in
+"Bugs already found": two stale Vercel `vercel.json` config issues
+(`runtime`/`memory` fields, then a `rewrites` rule) and one real application
+bug (`ensure_order_id` not handling `OrderAPIUnavailable`, caught by an
+actual Vercel cold start on the first live cross-service request). None of
+the four were guessable from local dev/CI alone -- each needed the real
+deployed thing to actually exist before it could surface. HF Spaces is the
+one target NOT yet actually deployed (still needs the user's HF account);
+everything else -- Vercel, Railway, and every fix along the way -- is done
+and verified live, not just locally.
 
 Two honest, still-open gaps outside the 7-phase scope, not silently
 resolved: `fixtures/fairness/`'s corpus (real in-domain per-language

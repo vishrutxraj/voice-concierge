@@ -16,6 +16,24 @@ Face Spaces, with **no paid dependency required to run it.**
 any of them. See [Build phases](#build-phases) for what shipped when, and
 [Evaluation results](#evaluation-results) for real numbers, not placeholders.
 
+**Live, deployed right now** — the real split, not a demo stand-in:
+
+| Service | URL |
+|---|---|
+| Gateway (Railway) | https://voice-concierge-production-83c5.up.railway.app |
+| Order API (Vercel + Upstash) | https://voice-concierge-eta.vercel.app |
+
+```bash
+curl -s https://voice-concierge-production-83c5.up.railway.app/health
+curl -X POST https://voice-concierge-production-83c5.up.railway.app/call/turn \
+  -H 'Content-Type: application/json' \
+  -d '{"session_id":"try-1","text":"where is my order","caller_phone":"9990000002"}'
+```
+
+This is a shared, live instance — writes (reschedule/address changes) persist
+in the real Upstash-backed store and are visible to anyone hitting it, not a
+private sandbox per visitor. Treat it like the demo it is.
+
 ---
 
 ## Contents
