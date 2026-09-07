@@ -1,5 +1,9 @@
 # Logistics & Delivery Voice Concierge
 
+[![CI](https://github.com/vishrutxraj/voice-concierge/actions/workflows/ci.yml/badge.svg)](https://github.com/vishrutxraj/voice-concierge/actions/workflows/ci.yml)
+[![Python 3.11](https://img.shields.io/badge/python-3.11-blue.svg)](https://www.python.org/downloads/release/python-3110/)
+[![Licence: Apache 2.0](https://img.shields.io/badge/licence-Apache%202.0-green.svg)](#licence)
+
 A multilingual voice AI agent for delivery/logistics customer support.
 Handles *"where is my order"*, rescheduling, and address correction across
 Indian languages — and hands a frustrated caller to a human before they have
