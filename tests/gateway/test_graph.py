@@ -146,6 +146,43 @@ def test_order_lookup_no_open_orders_escalates():
     assert r.state["escalation_reason"] == "order_id_not_found"
 
 
+def test_order_api_unavailable_during_phone_lookup_escalates_gracefully():
+    """
+    Regression test for a real bug found deploying the split for real (not in
+    a test, and not by code review): ensure_order_id's orders_for_phone call
+    -- the shared "which order is this about" step every domain agent calls
+    first -- had no OrderAPIUnavailable handling, unlike every other
+    OrderClient call site in the graph. A Vercel cold start alone was enough
+    to exceed the 4s client timeout and crash the whole turn with a raw 500
+    instead of the designed "let me connect you with a colleague" escalation.
+    """
+    import app.providers.order_client as order_client_module
+    from app.providers.order_client import OrderAPIUnavailable, OrderClient
+
+    class _FlakyOrderClient(OrderClient):
+        def get_order(self, order_id):
+            raise OrderAPIUnavailable("simulated timeout")
+
+        def orders_for_phone(self, phone):
+            raise OrderAPIUnavailable("simulated timeout")
+
+        def reschedule(self, *a, **kw):
+            raise OrderAPIUnavailable("simulated timeout")
+
+        def update_address(self, *a, **kw):
+            raise OrderAPIUnavailable("simulated timeout")
+
+    order_client_module._client = _FlakyOrderClient()
+    try:
+        r = run_turn("s9", "where is my order", caller_phone=RAVI)
+    finally:
+        reset_order_client()
+
+    assert r.state["escalated"] is True
+    assert r.state["escalation_reason"] == "order_api_unavailable"
+    assert "colleague" in r.reply_text.lower()
+
+
 # ---- reschedule: full interrupt/resume cycle ------------------------------
 
 

@@ -192,12 +192,58 @@ for the specifics.
   a valid version" deploy failures. `memory` can't be set in `vercel.json`
   at all with Fluid compute enabled (the default for new projects) -- it
   belongs in the dashboard's Functions settings. Fixed by dropping both,
-  keeping `maxDuration` (still valid) and `rewrites`. Also: this project's
-  monorepo layout needs Vercel's **"Include source files outside of the
-  Root Directory in the Build Step"** project setting ON (default for
-  projects created after Aug 2020, but verify it) -- `api/index.py` imports
-  `packages/order-contracts`, a sibling of `services/order-api`, outside
-  whatever Root Directory the Vercel project is scoped to.
+  keeping `maxDuration` (still valid). Note: the `rewrites` rule mentioned
+  here initially got REMOVED entirely a bit later (see the next entry) --
+  and the "Include source files outside Root Directory" setting turned out
+  to be the wrong lever for the `order_contracts` problem too (see the entry
+  after that). Both corrections came from the actual first live deploy, not
+  from re-reading docs harder.
+- Phase 7 (first live Vercel deploy): even after the config fixes above,
+  `api/index.py` crashed at import with `ModuleNotFoundError: No module
+  named 'order_contracts'`. The "Include source files outside Root
+  Directory" setting governs what's *readable during the build*, not what
+  Vercel's zero-config Python bundler actually ships into the function's
+  runtime filesystem -- a sibling directory outside Root Directory, reached
+  only via a runtime `sys.path.insert`, is invisible to the bundler
+  regardless of that setting. Fixed with `vercel.json`'s `installCommand`:
+  `cp -r ../../packages/order-contracts/order_contracts . && pip install -r
+  requirements.txt` -- copies the package to a sibling of `order_api/`
+  *inside* Root Directory before install, so it's bundled like any other
+  source file. No code change needed: `api/index.py`'s existing
+  `sys.path.insert(_ROOT)` already covers this location. `packages/order-
+  contracts` stays the one source of truth; the copy is gitignored
+  (`services/order-api/order_contracts/`) and produced fresh on every build.
+- Phase 7 (same deploy, next error): with the import fixed, every request
+  404'd. Per Vercel's current FastAPI framework docs, detecting a FastAPI
+  `app` at a supported entrypoint makes "the framework application handle
+  all requests" directly, original path intact -- no `rewrites` needed. Our
+  `rewrites` rule (`"/(.*)" -> "/api/index"`) was leftover from the older
+  file-based-routing-without-a-framework-preset model, and was sending every
+  request's effective path to the literal string `/api/index`, which
+  matches none of our routes (`order_api/router.py`'s are already correctly
+  prefixed `/api/orders...`, and `/api/health` is on `app` directly). Fixed
+  by deleting `rewrites` from `vercel.json` entirely.
+- Phase 7 (first live cross-service request, Railway gateway -> Vercel
+  order-api): `ensure_order_id`'s `client.orders_for_phone(phone)` --
+  the shared "which order is this about" call every domain agent makes
+  first -- had no `OrderAPIUnavailable` handling, unlike every other
+  `OrderClient` call site (`order_lookup.py`, `reschedule.py`,
+  `address_change.py` all already escalate gracefully on it). A Vercel cold
+  start alone was enough to exceed the 4s client timeout and crash the
+  whole turn with a raw 500 instead of "let me connect you with a
+  colleague." Never caught by any test because local/CI OrderClient calls
+  (in-process, or mocked HTTP transport) have no real timing/network
+  failure mode to trigger it -- only a genuine live cross-cloud request
+  could surface this. Fixed in `app/graph/nodes/order_identify.py` with the
+  same try/except-and-escalate pattern used everywhere else; regression
+  test added
+  (`test_order_api_unavailable_during_phone_lookup_escalates_gracefully`).
+  **Known follow-up, not fixed yet:** `order_resolution.py`'s
+  `resolve_order_id` and `format_disambiguation_prompt` each call
+  `orders_for_phone` AGAIN independently (redundant network calls on top of
+  `ensure_order_id`'s own call) and are NOT covered by this guard -- a
+  caller with multiple open orders could still hit an unhandled crash if
+  one of those specific calls fails after the first one succeeded.
 
 ## Working conventions
 

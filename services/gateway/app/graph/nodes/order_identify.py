@@ -14,7 +14,7 @@ from dataclasses import dataclass
 from app.graph.order_resolution import format_disambiguation_prompt, resolve_order_id
 from app.graph.state import CallState
 from app.observability.trace import EventKind, trace
-from app.providers.order_client import get_order_client
+from app.providers.order_client import OrderAPIUnavailable, get_order_client
 
 
 @dataclass
@@ -35,7 +35,31 @@ def ensure_order_id(state: CallState, node_name: str) -> OrderIdOutcome:
     utterance = state.get("last_utterance", "")
     client = get_order_client()
 
-    open_orders = client.orders_for_phone(phone)
+    try:
+        open_orders = client.orders_for_phone(phone)
+    except OrderAPIUnavailable as exc:
+        # Found live, not in a test: a Vercel cold start alone can exceed the
+        # 4s client timeout on this exact call. Every OTHER OrderClient call
+        # site (order_lookup.py, reschedule.py, address_change.py) already
+        # escalates gracefully on OrderAPIUnavailable -- this shared "which
+        # order is this about" step, called by all three agents, was the one
+        # place that didn't, so a transient network hiccup crashed the whole
+        # turn with a raw 500 instead of "let me connect you with a
+        # colleague." resolve_order_id/format_disambiguation_prompt below
+        # each call orders_for_phone again independently and aren't yet
+        # covered by this same guard -- a known follow-up, not silently
+        # assumed fixed.
+        trace(session_id, EventKind.ERROR, node_name, "order_api_unavailable",
+              data={"error": str(exc)})
+        return OrderIdOutcome(
+            False, None,
+            {
+                "agent_reply": "I'm having trouble reaching our order system right now — "
+                              "let me get a colleague to help.",
+                "escalated": True,
+                "escalation_reason": "order_api_unavailable",
+            },
+        )
 
     # The common case: a generic "where's my order" carries no order-ID
     # fragment at all, so fuzzy-matching against DLV1001/1002/1003 correctly
