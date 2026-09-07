@@ -1,0 +1,8 @@
+# Root aggregator so `pip install -r requirements-dev.txt` (used by CI and
+# dev.ps1) installs everything both services need to run under pytest from
+# the repo root. Each service's own requirements.txt remains the source of
+# truth for its pinned versions and stays authoritative for its standalone
+# deployment (Vercel bundle, gateway Docker image) -- this file only unions
+# them for the local/CI dev loop.
+-r services/gateway/requirements.txt
+-r services/order-api/requirements.txt

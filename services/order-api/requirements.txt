@@ -1,0 +1,4 @@
+# Kept minimal: every megabyte here is Vercel cold-start latency.
+fastapi==0.115.6
+pydantic==2.10.4
+httpx==0.28.1

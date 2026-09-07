@@ -1,0 +1,22 @@
+# Pinned deliberately — floating versions cause resolver conflicts in CI and
+# on HF Spaces, where the build cache makes failures slow to diagnose.
+fastapi==0.115.6
+uvicorn[standard]==0.34.0
+pydantic==2.10.4
+pydantic-settings==2.7.0
+httpx==0.28.1
+python-multipart==0.0.20
+
+langgraph==0.2.60
+langgraph-checkpoint-sqlite==2.0.1
+langchain-core==0.3.28
+
+gradio==5.9.1
+
+# Fuzzy order-ID matching against the caller's own open orders.
+rapidfuzz==3.11.0
+numpy==2.2.1
+soundfile==0.13.0
+
+# Optional observability mirror; the service is fully traceable without it.
+langfuse==2.57.0

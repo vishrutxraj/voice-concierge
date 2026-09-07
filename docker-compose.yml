@@ -1,0 +1,36 @@
+# Local development mirrors the deployed split: two services, two ports.
+#
+# order-api runs here as a container purely for parity testing; in production
+# it is a Vercel function. Leave ORDER_API_BASE_URL unset to skip it entirely
+# and use the in-process client — faster, and what CI does.
+services:
+  gateway:
+    build:
+      context: .
+      dockerfile: services/gateway/Dockerfile
+    ports: ["7860:7860"]
+    env_file: [.env]
+    environment:
+      ORDER_API_BASE_URL: "http://order-api:8000"
+    depends_on: [order-api]
+    volumes:
+      - ./services/gateway/app:/home/appuser/app/app:ro
+      - ./packages/order-contracts:/home/appuser/contracts:ro
+      - gateway-data:/home/appuser/app/data
+    command: uvicorn app.main:app --host 0.0.0.0 --port 7860 --reload
+
+  order-api:
+    image: python:3.11-slim
+    working_dir: /srv
+    ports: ["8000:8000"]
+    environment:
+      PYTHONPATH: /srv/services/order-api:/srv/packages/order-contracts
+    volumes:
+      - .:/srv:ro
+    command: >
+      sh -c "pip install -q -r services/order-api/requirements.txt uvicorn &&
+             uvicorn api.index:app --host 0.0.0.0 --port 8000
+             --app-dir services/order-api"
+
+volumes:
+  gateway-data:

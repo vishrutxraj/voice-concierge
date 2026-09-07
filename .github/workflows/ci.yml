@@ -1,0 +1,74 @@
+name: CI
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.11", cache: pip }
+
+      - run: pip install -r requirements-dev.txt
+
+      - name: Lint
+        run: ruff check services packages tests scripts
+
+      - name: Test
+        # No secrets. The suite must pass fully offline — if a test needs a
+        # live key or a deployed service, that test is wrong.
+        run: pytest -q
+
+      - name: Export OpenAPI contract
+        run: python scripts/export_openapi.py
+
+      - uses: actions/upload-artifact@v4
+        with: { name: openapi-contract, path: contracts/openapi.json }
+
+  gateway-image:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build gateway image
+        run: docker build -f services/gateway/Dockerfile -t gateway:ci .
+      - name: Boot and health-check
+        run: |
+          docker run -d --name gw -p 7860:7860 -e PORT=7860 gateway:ci
+          for i in $(seq 1 30); do
+            curl -fsS http://localhost:7860/health && break
+            sleep 2
+          done
+          curl -fsS http://localhost:7860/health || { docker logs gw; exit 1; }
+      - name: Exercise a real request (not just /health)
+        # /health never touches OrderClient, so it stayed green through a real
+        # bug: the image shipped without services/order-api bundled in, and
+        # InProcessOrderClient's `from order_api.store import get_store`
+        # (used whenever ORDER_API_BASE_URL is unset, exactly this job's
+        # config) 500'd on every order-touching request. Found by hand, not
+        # by CI, because this job only ever checked /health -- see CLAUDE.md's
+        # phase 7 bug entry. This step is what would have caught it.
+        run: |
+          resp=$(curl -fsS -X POST http://localhost:7860/call/turn \
+            -H 'Content-Type: application/json' \
+            -d '{"session_id":"ci-smoke","text":"where is my order","caller_phone":"9990000002"}')
+          echo "$resp"
+          echo "$resp" | grep -q '"intent":"order_lookup"' || { docker logs gw; exit 1; }
+
+  order-api-bundle:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.11" }
+      - name: Verify order-api imports standalone
+        # Catches the failure mode the split exists to prevent: the Vercel
+        # bundle accidentally depending on gateway code that isn't deployed
+        # with it. Only the service's own requirements are installed.
+        run: |
+          pip install -r services/order-api/requirements.txt
+          PYTHONPATH=services/order-api:packages/order-contracts \
+            python -c "from api.index import app; print(len(app.routes), 'routes')"

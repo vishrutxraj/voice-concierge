@@ -1,0 +1,24 @@
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.env
+.env.*
+!.env.example
+data/
+# fixtures/audio/*.wav used to be blanket-ignored before real fixtures existed
+# (see fixtures/audio/manifest.json and its README for provenance) -- they're
+# real now, small, and openly licensed, so they're tracked like any other
+# fixture. This guards against a FUTURE large/ad-hoc personal recording
+# dropped in the same directory without being added to the manifest.
+fixtures/audio/*.wav
+!fixtures/audio/hi_in_*.wav
+!fixtures/audio/ta_in_*.wav
+!fixtures/audio/te_in_*.wav
+!fixtures/audio/bn_in_*.wav
+!fixtures/audio/.gitkeep
+.pytest_cache/
+.ruff_cache/
+*.db
+contracts/*.json
+data/checkpoints.db
