@@ -181,6 +181,23 @@ for the specifics.
   `/health`; exercise at least one real request path (`/call/turn`) against
   a locally built image before trusting a Dockerfile change, or a Vercel/
   Railway split boundary change, is deploy-ready.**
+- Phase 7 (Vercel deploy prep): `services/order-api/vercel.json` had
+  `"runtime": "@vercel/python@4.3.1"` and `"memory": 512` in its `functions`
+  config -- both obsolete/wrong per current (2026-08) docs.vercel.com,
+  checked BEFORE the first real deploy rather than assumed from training
+  data (rule 5). Vercel's Python support is zero-config now (auto-detected
+  from `requirements.txt`); `runtime` in `vercel.json` is reserved for
+  community/third-party runtimes only (e.g. `vercel-php@0.5.2`) and an
+  unrecognized value there is a known cause of "Function Runtimes must have
+  a valid version" deploy failures. `memory` can't be set in `vercel.json`
+  at all with Fluid compute enabled (the default for new projects) -- it
+  belongs in the dashboard's Functions settings. Fixed by dropping both,
+  keeping `maxDuration` (still valid) and `rewrites`. Also: this project's
+  monorepo layout needs Vercel's **"Include source files outside of the
+  Root Directory in the Build Step"** project setting ON (default for
+  projects created after Aug 2020, but verify it) -- `api/index.py` imports
+  `packages/order-contracts`, a sibling of `services/order-api`, outside
+  whatever Root Directory the Vercel project is scoped to.
 
 ## Working conventions
 
