@@ -135,8 +135,15 @@ def test_asr_http_error_raises_unavailable_not_generic_exception():
         SarvamASRClient, handler,
         api_key="k", model="saaras:v3", mode="translate", base_url="https://api.sarvam.ai",
     )
-    with pytest.raises(ASRUnavailable):
+    with pytest.raises(ASRUnavailable) as excinfo:
         client.transcribe(b"audio")
+    # Regression: str(httpx.HTTPStatusError) alone drops the response BODY,
+    # which is where a provider actually explains a 4xx/5xx (e.g. Sarvam's
+    # "Model 'bulbul:v2' has been deprecated..."). A real TTS failure was
+    # opaque in every log until someone made the same request by hand just
+    # to read it -- the message here must include the body, not just the
+    # status code.
+    assert "server error" in str(excinfo.value)
 
 
 def test_asr_caches_identical_audio_and_skips_network_on_replay():
@@ -263,8 +270,12 @@ def test_tts_http_error_raises_unavailable():
         SarvamTTSClient, handler,
         api_key="k", model="bulbul:v2", speaker="anushka", base_url="https://api.sarvam.ai",
     )
-    with pytest.raises(TTSUnavailable):
+    with pytest.raises(TTSUnavailable) as excinfo:
         client.synthesize("hello")
+    # Same regression as the ASR client -- see that test's comment. This is
+    # exactly the class of bug that shipped a broken bulbul:v2 to production
+    # silently; the message must carry the body, not just the status line.
+    assert "rate limited" in str(excinfo.value)
 
 
 def test_tts_caches_identical_text_voice_language_and_skips_network():

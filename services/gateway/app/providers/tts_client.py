@@ -23,6 +23,7 @@ from dataclasses import dataclass
 
 from app.config import get_settings
 from app.providers.cache import get_cache
+from app.providers.http_errors import describe_http_error
 
 
 class TTSUnavailable(RuntimeError):
@@ -79,7 +80,12 @@ class SarvamTTSClient(TTSClient):
             )
             resp.raise_for_status()
         except httpx.HTTPError as exc:
-            raise TTSUnavailable(str(exc)) from exc
+            # str(exc) alone drops the response BODY, which is where Sarvam
+            # actually explains a 4xx (e.g. "Model 'bulbul:v2' has been
+            # deprecated..."). Found the hard way: that exact message was
+            # invisible until someone made the same request by hand outside
+            # this client. Never make that the only way to find out again.
+            raise TTSUnavailable(describe_http_error(exc)) from exc
 
         data = resp.json()
         audios = data.get("audios") or []

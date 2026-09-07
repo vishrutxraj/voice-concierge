@@ -542,7 +542,7 @@ and the content-hash cache makes even that spend mostly one-time.
 | Hugging Face Spaces (gateway fallback) | **Not actually free** — Docker/Gradio Spaces now require HF PRO even on `cpu-basic`; see "Deploying" |
 | Groq (LLM) | Free tier |
 | Sarvam STT | ₹30/hour of audio |
-| Sarvam TTS | Bulbul v2 ₹15/10k chars (dev) · v3 ₹30/10k chars (demo) |
+| Sarvam TTS | Bulbul v3, ₹30/10k chars — v2 is fully removed by Sarvam now, not just legacy (confirmed live) |
 
 A three-minute call costs roughly ₹4.50. Sarvam's ₹100 signup credit covers
 ~20 uncached calls — or several hundred in practice, because

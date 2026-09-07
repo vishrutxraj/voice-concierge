@@ -46,12 +46,20 @@ class Settings(BaseSettings):
     # LLM
     groq_llm_model: str = "llama-3.3-70b-versatile"
     groq_llm_fast_model: str = "llama-3.1-8b-instant"
-    # TTS  (v2 during development at half the per-character rate, v3 for demo)
-    sarvam_tts_model_dev: str = "bulbul:v2"
+    # TTS. bulbul:v2 (originally used here for dev, at half v3's per-character
+    # rate) is now REMOVED, not just legacy -- confirmed live: Sarvam rejects
+    # it outright with "Model 'bulbul:v2' has been deprecated. Please use
+    # 'bulbul:v3' instead." (a 400, not a warning), first caught by an actual
+    # WebSocket call against the deployed gateway, not by re-reading docs.
+    # Both dev and demo use v3 now; the two settings stay separate in case a
+    # cheaper dev-tier model shows up again later.
+    sarvam_tts_model_dev: str = "bulbul:v3"
     sarvam_tts_model_demo: str = "bulbul:v3"
     # Default speaker differs per model version — verified per-speaker defaults,
     # not guessed. Speaker names are case-sensitive and must be lowercase.
-    sarvam_tts_speaker_dev: str = "anushka"  # bulbul:v2 default
+    # "anushka" was bulbul:v2's default and is NOT a valid bulbul:v3 speaker
+    # (confirmed live: Sarvam returns the full valid-speaker list on a 400).
+    sarvam_tts_speaker_dev: str = "shubh"  # bulbul:v3 default
     sarvam_tts_speaker_demo: str = "shubh"  # bulbul:v3 default
 
     # ---- Provider selection -------------------------------------------

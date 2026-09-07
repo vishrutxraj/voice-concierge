@@ -29,6 +29,7 @@ from dataclasses import dataclass
 
 from app.config import get_settings
 from app.providers.cache import get_cache
+from app.providers.http_errors import describe_http_error
 
 
 class ASRUnavailable(RuntimeError):
@@ -86,7 +87,7 @@ class SarvamASRClient(ASRClient):
             )
             resp.raise_for_status()
         except httpx.HTTPError as exc:
-            raise ASRUnavailable(str(exc)) from exc
+            raise ASRUnavailable(describe_http_error(exc)) from exc
 
         data = resp.json()
         text = data.get("transcript", "")

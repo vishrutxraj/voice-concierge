@@ -245,6 +245,27 @@ for the specifics.
   `ensure_order_id`'s own call) and are NOT covered by this guard -- a
   caller with multiple open orders could still hit an unhandled crash if
   one of those specific calls fails after the first one succeeded.
+- Phase 7 (first real `/ws/call` test against the live Railway deployment,
+  after Vercel/Railway were already verified working over text): TTS failed
+  on every single reply with a bare `TTSUnavailable` 400. `SarvamTTSClient`
+  only calls `resp.raise_for_status()` and never logs the response BODY, so
+  the real reason was invisible until a raw `httpx.post` to
+  `api.sarvam.ai/text-to-speech` was made by hand to read it:
+  `"Model 'bulbul:v2' has been deprecated. Please use 'bulbul:v3' instead."`
+  -- config.py's own comment claimed bulbul:v2 was "verified against
+  docs.sarvam.ai (Aug 2026)" and cheaper for dev use; Sarvam removed it
+  entirely at some point after that, and nothing re-checked it until a real
+  audio call actually needed it. `env=dev` (this project's default) always
+  used the dev model/speaker pair, so this broke ALL audio replies in the
+  live deployment while text-only `/call/turn` stayed completely unaffected
+  (it never touches TTS) -- which is exactly why the earlier "it's deployed
+  and working" checks didn't catch it. Also confirmed live: `anushka`
+  (bulbul:v2's default speaker) isn't a valid bulbul:v3 speaker at all
+  (Sarvam's 400 body lists the real current roster). Fixed by moving both
+  dev and demo to `bulbul:v3` / speaker `shubh`. **If a Sarvam (or any
+  provider) call fails with an opaque error, read the actual response body
+  before guessing -- `raise_for_status()` alone throws away the message
+  that would have explained it in one line.**
 
 ## Working conventions
 
