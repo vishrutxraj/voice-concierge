@@ -202,6 +202,17 @@ def forget_session(session_id: str) -> dict:
 # Gradio test harness (phase 6) -- mounted last, after every FastAPI route
 # above is registered. app/ui/harness.py holds the actual logic; blocks.py is
 # thin Gradio glue over it -- see both modules' docstrings.
+#
+# root_path="/ui" is load-bearing, not optional: without it, Gradio's own
+# frontend JS calls its API (queue/join, upload, ...) at the SITE ROOT
+# (/gradio_api/...) instead of under the mount (/ui/gradio_api/...), 404ing
+# on every real interaction while the page itself still loads fine -- static
+# assets don't need root_path, only Gradio's own follow-up API calls do. A
+# TestClient GET on "/ui/" checks the initial HTML status only and never
+# exercises this at all; it took an actual browser hitting the real deployed
+# URL to surface it. Same lesson as the Docker order_api bundling bug:
+# passing a shallow health-style check is not the same as the real client
+# interaction working.
 # --------------------------------------------------------------------------
 
-app = gr.mount_gradio_app(app, build_demo(), path="/ui")
+app = gr.mount_gradio_app(app, build_demo(), path="/ui", root_path="/ui")

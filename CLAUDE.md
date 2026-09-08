@@ -291,6 +291,22 @@ for the specifics.
   previously running on mocks, re-verify its configured model IDs against a
   live account before trusting they still work -- this is now the second
   provider roster that rotated out from under this project's own defaults.**
+- `gr.mount_gradio_app(app, build_demo(), path="/ui")` without `root_path="/ui"`
+  loaded fine in a browser but broke on the first real interaction: Gradio's
+  own frontend JS calls its API (`/gradio_api/queue/join`, `/gradio_api/upload`,
+  ...) relative to whatever root it thinks it's served from, and without
+  `root_path` it assumes the site root, so those calls 404 against the real
+  mount at `/ui` while `/ui/assets/*` static files and the initial page both
+  return 200. Invisible to every automated check that existed at the time —
+  `TestClient.get("/ui/")` only checks the initial HTML's status code, never
+  a follow-up API call — and only surfaced when the user actually opened the
+  deployed URL in a real browser and hit "connection error". Root-caused via
+  `railway logs`, fixed by passing `root_path="/ui"` to `mount_gradio_app`,
+  and given a regression test that regex-greps the embedded `"root"` JSON
+  config out of the served HTML and asserts it ends with `/ui`
+  (`test_ui_declares_its_own_mount_path_as_root` in `test_ui_harness.py`) —
+  the same "shallow check passes, real client interaction doesn't" lesson as
+  the Docker order_api bundling bug, just on the browser side this time.
 
 ## Working conventions
 

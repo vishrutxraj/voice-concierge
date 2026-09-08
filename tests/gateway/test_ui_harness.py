@@ -13,6 +13,8 @@ real browser/Gradio client would mostly be testing Gradio itself.
 
 from __future__ import annotations
 
+import re
+
 import pytest
 from app.providers.llm_client import reset_llm_client
 from app.providers.order_client import InProcessOrderClient, reset_order_client
@@ -200,3 +202,29 @@ def test_ui_is_mounted_and_existing_routes_still_work():
         )
         assert resp.status_code == 200
         assert resp.json()["intent"] == "order_lookup"
+
+
+def test_ui_declares_its_own_mount_path_as_root():
+    """
+    Regression test for a real bug found in an actual browser against the
+    live deployment, not by any automated check -- a TestClient GET on
+    "/ui/" only checks the initial HTML's status code and never exercises
+    this at all. Without root_path="/ui" on gr.mount_gradio_app, Gradio's own
+    frontend JS calls its API (queue/join, upload, ...) at the SITE ROOT
+    instead of under the mount, 404ing on every real interaction while the
+    page itself still loaded fine. Gradio embeds the root it thinks it's
+    served from directly in the page as JSON; assert it's actually "/ui",
+    not the bare origin.
+    """
+    from app.main import app
+    from fastapi.testclient import TestClient
+
+    with TestClient(app, base_url="http://testserver") as client:
+        html = client.get("/ui/").text
+
+    match = re.search(r'"root"\s*:\s*"([^"]*)"', html)
+    assert match is not None, "Gradio's embedded config should declare a root path"
+    assert match.group(1).endswith("/ui"), (
+        f"Gradio thinks its root is {match.group(1)!r} -- API calls (queue/join, "
+        "upload) will 404 against the real mount at /ui"
+    )
