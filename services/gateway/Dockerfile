@@ -1,5 +1,14 @@
-# Gateway: persistent WebSockets, no execution ceiling. Railway (primary),
-# HF Spaces (free fallback), and local — one image for all three.
+# Stage 1: build the React UI (services/web). Node lives only in this stage --
+# the final image ships just the static files, no Node runtime.
+FROM node:22-slim AS web
+WORKDIR /web
+COPY services/web/package.json services/web/package-lock.json ./
+RUN npm ci
+COPY services/web/ .
+RUN npm run build
+
+# Stage 2: the gateway. Persistent WebSockets, no execution ceiling. Railway
+# (primary) and local -- one image for both.
 FROM python:3.11-slim
 
 ENV PYTHONUNBUFFERED=1 PYTHONDONTWRITEBYTECODE=1 PIP_NO_CACHE_DIR=1
@@ -29,6 +38,12 @@ COPY --chown=appuser:appuser services/order-api/order_api /home/appuser/order-ap
 ENV PYTHONPATH=/home/appuser/contracts:/home/appuser/order-api
 
 COPY --chown=appuser:appuser services/gateway/ .
+
+# Built UI, served at /app by app/main.py (see Settings.web_dist_dir). If this
+# ever goes missing the gateway still boots and /ui (Gradio) still works.
+COPY --from=web --chown=appuser:appuser /web/dist /home/appuser/web-dist
+ENV WEB_DIST_DIR=/home/appuser/web-dist
+
 RUN mkdir -p data/cache && chown -R appuser:appuser data
 USER appuser
 

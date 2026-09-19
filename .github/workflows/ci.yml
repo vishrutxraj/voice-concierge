@@ -29,6 +29,24 @@ jobs:
       - uses: actions/upload-artifact@v4
         with: { name: openapi-contract, path: contracts/openapi.json }
 
+  web:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: services/web
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: services/web/package-lock.json
+      - run: npm ci
+      - name: Typecheck, then build
+        run: npm run build
+      - name: Test
+        run: npm test
+
   gateway-image:
     runs-on: ubuntu-latest
     steps:
@@ -57,6 +75,16 @@ jobs:
             -d '{"session_id":"ci-smoke","text":"where is my order","caller_phone":"9990000002"}')
           echo "$resp"
           echo "$resp" | grep -q '"intent":"order_lookup"' || { docker logs gw; exit 1; }
+      - name: Web UI is served from the image
+        # The React build happens in a Node stage and is copied in; a broken
+        # COPY path or base path would still leave /health green. Fetch the
+        # page AND one of its built assets, and confirm the Gradio fallback
+        # UI is still mounted.
+        run: |
+          curl -fsS http://localhost:7860/app/ | grep -q '<div id="root">' || { docker logs gw; exit 1; }
+          asset=$(curl -fsS http://localhost:7860/app/ | grep -o '/app/assets/[^"]*\.js' | head -1)
+          curl -fsS -o /dev/null "http://localhost:7860${asset}" || { docker logs gw; exit 1; }
+          curl -fsS -o /dev/null http://localhost:7860/ui/ || { docker logs gw; exit 1; }
 
   order-api-bundle:
     runs-on: ubuntu-latest

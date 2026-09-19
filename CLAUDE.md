@@ -36,7 +36,7 @@ reason, not left undone — see the HF Spaces entry near the end of "Bugs
 already found" below before assuming it's still just a free fallback
 waiting to be pushed to.
 
-227 tests pass, offline, with zero credentials. **If a test needs a live API
+357 Python tests pass, offline (plus 41 frontend tests via `npm test` in services/web), with zero credentials. **If a test needs a live API
 key, the test is wrong** — this has been a hard rule since phase 0 and every
 provider (order client, LLM, ASR, TTS) has a mock implementation specifically
 so the whole suite runs free and fast. Keep it that way.
@@ -239,12 +239,10 @@ for the specifics.
   same try/except-and-escalate pattern used everywhere else; regression
   test added
   (`test_order_api_unavailable_during_phone_lookup_escalates_gracefully`).
-  **Known follow-up, not fixed yet:** `order_resolution.py`'s
-  `resolve_order_id` and `format_disambiguation_prompt` each call
-  `orders_for_phone` AGAIN independently (redundant network calls on top of
-  `ensure_order_id`'s own call) and are NOT covered by this guard -- a
-  caller with multiple open orders could still hit an unhandled crash if
-  one of those specific calls fails after the first one succeeded.
+  (The follow-up noted here -- `resolve_order_id` and
+  `format_disambiguation_prompt` re-querying `orders_for_phone` unguarded --
+  is FIXED: `ensure_order_id` fetches once and passes the list down. See
+  "Dialogue memory" below.)
 - Phase 7 (first real `/ws/call` test against the live Railway deployment,
   after Vercel/Railway were already verified working over text): TTS failed
   on every single reply with a bare `TTSUnavailable` 400. `SarvamTTSClient`
@@ -307,6 +305,116 @@ for the specifics.
   (`test_ui_declares_its_own_mount_path_as_root` in `test_ui_harness.py`) —
   the same "shallow check passes, real client interaction doesn't" lesson as
   the Docker order_api bundling bug, just on the browser side this time.
+
+- Post-phase-7: replies were spoken in the wrong language. The graph's
+  `reply_text` is always English (ASR runs `mode="translate"`), and
+  `call_loop`/the Gradio harness passed it to TTS with only
+  `target_language_code=hi-IN` -- an English sentence in a Hindi voice. Nothing
+  translated it. Fixed at the output edge, not in the graph (the "reason in
+  English" bet stands): `app/providers/translate_client.py` (Sarvam
+  `POST /translate`, `sarvam-translate:v1`, contract verified live) plus
+  `app/audio/localize.py::localize_reply()`, called from `call_loop._deliver`
+  and `harness.run_audio_turn`. Any NEW code path that sends text to TTS must
+  go through `localize_reply()` too, including hardcoded English literals.
+  Falls back to English text + en-IN voice (never an error) when translation
+  is down or the language isn't in bulbul:v3's 11-language TTS roster
+  (translate supports 22, TTS only 11 -- Urdu etc. would 400 at TTS). The
+  WebSocket `reply` event's `text` is now the localized text; `text_en` keeps
+  the English original. Live-probed: order IDs, dates, pincodes survive
+  translation intact.
+- Dual-language output (follow-up): text is ALWAYS both languages (reply
+  event `text` + `text_en`; `/call/turn` `reply_text` + `reply_text_localized`;
+  Gradio shows both). Audio is the caller's choice -- `transport.audio_preference`
+  (`native`|`english`|`both`, set on the WS `start` message or `set_audio`
+  mid-call; Gradio's "Language to hear" radio) -- and only chosen renderings
+  are synthesized. `audio_tracks()` in `localize.py` is the single place that
+  decides this; an untranslated reply always yields ONE track so "both" never
+  speaks the same English twice. Verified through `gradio_client` against live
+  Sarvam. NOT verified: how the Gradio page looks/autoplays in a real browser
+  (in "both" only the detected-language player autoplays; English sits ready).
+
+## The web UI (post-phase-7)
+
+`services/web/` -- React + TS + Tailwind (Vite), the real front end. Served
+by the gateway at `/app` (`app/main.py::find_web_dist`, mounted only if a
+build exists; `/` redirects there, else to `/ui`), so page + WebSocket + explain
+API are one origin: no CORS. Docker builds it in a Node stage. **Gradio at
+`/ui` is intentionally kept as the fallback UI -- do not delete it**; it is a
+known-good interface over the same backend if the web UI breaks.
+
+Decisions that aren't obvious from the code:
+- Client-side 16 kHz mono PCM16 WAV encoding (`src/lib/wav.ts`), NOT
+  MediaRecorder: Sarvam accepts webm/ogg/mp4 (verified in docs), but the
+  gateway labels uploads `audio/wav` and browsers differ, so one known format
+  avoids per-browser surprises.
+- Client-side end-of-speech detection (`src/lib/recorder.ts`); server has no VAD.
+- Reply audio can't stream-decode (chunks are slices of ONE WAV); the player
+  buffers per track and decodes at `audio_track`/`audio_end`.
+- Tapping the mic while the agent speaks = barge-in: `player.stop()` locally,
+  the server fences the old turn's output.
+- `src/lib/protocol.ts` mirrors the server's events; change both together.
+- No text-input path over `/ws/call` (voice only), so confirmations are spoken
+  "yes"/"no" -- there are no yes/no buttons. Adding them needs a new protocol
+  message (bypassing ASR), and must still go through `interpret_confirmation`
+  semantics on the server (rule 3).
+
+Verified: `npm test`/`npm run build`; served over real HTTP; and an
+end-to-end WebSocket run using the CLIENT's own resample+`encodeWav` on a
+real Hindi clip against live Sarvam (accepted, `hi-IN` detected, both tracks
+returned as complete RIFF WAVs). **NOT verified: how it looks or behaves in an
+actual browser** -- real mic capture, AudioWorklet, Web Audio playback and
+layout have only been checked by code + SSR smoke tests, never by eye. Expect
+first-contact rough edges there (this project's history says the browser is
+where shallow checks stop: see the Gradio `root_path` bug above). Also NOT
+verified: the multi-stage Dockerfile build (Docker Desktop wasn't running) --
+CI's `gateway-image` job now fetches `/app/` and a built asset, so the first
+push will tell; if it fails, check the `COPY --from=web` path and lockfile first.
+
+## Dialogue memory (added after a real user session went wrong)
+
+A caller (Telugu, three open orders) said "Tell me where my yoga mat order is".
+The agent asked "which order?", the caller answered "yoga mat", and was
+**handed to a human**. The order existed (`DLV1003`, pending). Four bugs, one
+theme: *the agent had no memory of the question it had just asked.* Found by
+replaying the conversation against the live Groq model, not by reading code.
+
+1. `ensure_order_id` only fuzzy-matched order IDs, so "yoga mat", "the pending
+   one" and "the third one" meant nothing. -> `app/graph/order_reference.py`
+   (pure, no LLM/network): ID / item name / status / ordinal signals; explicit
+   ID wins; contradicting signals are `ambiguous`, never silently picked.
+2. The router classified the bare answer cold ("yoga mat" -> fallback, 0.1;
+   "the third one" -> **address_change, 0.9**). -> agents now record what they
+   asked as `pending_disambiguation` (which order) or `pending_followup`
+   ("what day?" = slot, "want to reschedule?" = offer); the router checks these
+   FIRST and continues that task deterministically, without an LLM call.
+   An unclear answer gets one re-ask, then a specific
+   `order_disambiguation_failed` handoff -- never a generic one on first miss.
+3. An exact `DLV1003` was judged ambiguous (neighbours score 0.92, margin rule
+   is 0.08). Exact match now wins outright.
+4. (Found while verifying the above, pre-existing.) A turn that paused at
+   `interrupt()` re-published the PREVIOUS turn's reply, so the caller heard
+   "what day works?" again instead of the confirmation read-back. Cause: the
+   composer runs twice per turn (separate edges = "any fires", not "wait for
+   all" -- the old comments claimed the opposite) and its early run read last
+   turn's `agent_reply`. Fixed by clearing `agent_reply`/`reply_text` each turn
+   (`runner.py`) and making the early composer run a no-op.
+
+Rules that keep this from regressing:
+- **A pending question is only live on the very next turn** (`graph/dialogue.py`,
+  `at_turn`). Never clear-by-hand; expiry is what stops a stale question from
+  hijacking an unrelated later reply. If you add an agent question a caller
+  will answer tersely, set `pending_followup` (`new_pending(state, ...)`).
+- **Don't rely on classifying an answer cold.** If you ask something, register
+  it; test it with the SCRIPTED LLM in `tests/gateway/test_dialogue.py` (the
+  mock's keyword classifier hides exactly this class of bug).
+- Per-turn output keys (`agent_reply`, `reply_text`) must not survive turns.
+- Order identification fetches `orders_for_phone` at most once per session
+  (`order_snapshot`); switching orders mid-call ("what about the speaker?") works.
+
+Known gaps, not fixed: a *declined* offer ("no thanks") still falls through to
+the classifier and can escalate; a caller asking about an item NOT in a
+single-order account gets that one order's status; ordinal answers only cover
+the first 3 options read aloud.
 
 ## Working conventions
 

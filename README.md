@@ -238,17 +238,29 @@ forcibly cancel a running thread — so the correct move is fencing the
 
 ```
 client -> server
-  {"type": "start", "session_id"?, "caller_phone"?}   -- once, first message
+  {"type": "start", "session_id"?, "caller_phone"?, "audio"?}  -- once, first message
   <binary frame>                                       -- one whole utterance
+  {"type": "set_audio", "audio": "native"|"english"|"both"}   -- change mid-call
   {"type": "hangup"}
 
 server -> client
   {"type": "ready", "session_id": "..."}
   {"type": "transcript", "text": "...", "language": "hi-IN"}
-  {"type": "reply", "text": "...", "intent": "...", "awaiting_confirmation": {...} | null}
+  {"type": "reply", "text": "<caller's language>", "text_en": "<English>",
+   "language": "hi-IN", "audio": ["native", "english"],
+   "intent": "...", "awaiting_confirmation": {...} | null}
+  {"type": "audio_track", "variant": "native"|"english", "language": "..."}
+                          -- only when "both": marks each track in the stream
   <binary frame> x N                                    -- streamed reply audio
   {"type": "audio_end"}   -- or {"type": "barge_in"} if new caller audio cut it short
 ```
+
+Every reply carries its text in **both** languages (`text` = the caller's
+language, `text_en` = English; identical for an English caller). `audio` is
+the caller's choice of what to *hear*: `native` (default), `english`, or
+`both` (native then English). Only the chosen renderings are synthesized, so
+an unwanted one costs no TTS call. `/call/turn` returns `reply_text` (English)
+plus `reply_text_localized` when `language` is a non-English code.
 
 `/ws/call` treats one inbound binary frame as one whole utterance — a
 browser client does push-to-talk or its own silence detection and sends a
@@ -314,14 +326,14 @@ same way you'd benchmark any vendor API before depending on it.
 git clone <repo> && cd voice-concierge
 cp .env.example .env          # works unfilled -- mocks cover every provider
 pip install -r requirements-dev.txt
-pytest -q                     # 227 tests, no network, no credentials
+pytest -q                     # 357 tests, no network, no credentials
 ```
 
 Gateway alone, in-process order client (fastest loop, what CI uses):
 
 ```bash
 cd services/gateway && uvicorn app.main:app --reload --port 7860
-# -> http://localhost:7860/ui   (Gradio test harness)
+# -> http://localhost:7860/      (web UI, if built -- else the Gradio harness)
 ```
 
 Both services, mirroring the deployed split:
@@ -337,9 +349,53 @@ no editable installs.
 
 ## Trying it out
 
-### The Gradio test harness
+### The web UI (`services/web`)
 
-The fastest way to actually feel the agent work. Two tabs: a text chat that
+The real front end: a React + TypeScript + Tailwind single-page app that
+talks to `/ws/call` directly. Tap the mic, speak in any supported language,
+and each reply appears as text in **both** your language and English; a
+"Hear replies in" control (My language / English / Both) picks what is
+*spoken*. A side panel renders the explain trail ("why the agent did that")
+as decisions, guardrail checks, and tool calls instead of JSON.
+
+The gateway serves the built app at `/app`, so the page, the WebSocket and
+the explain API share one origin (no CORS, no second deploy). Needs Node 22+
+to build; the Docker image builds it in a Node stage, so deploys need nothing
+extra.
+
+```bash
+cd services/web
+npm ci
+npm run build                   # -> dist/, picked up by the gateway at /app
+# or, for live-reload development against a running gateway:
+GATEWAY_URL=http://127.0.0.1:7860 npm run dev    # -> http://localhost:5173/app/
+npm test                        # protocol reducer, WAV encoder, render smoke tests
+```
+
+Browsers need HTTPS for microphone access (localhost counts as secure).
+
+Design notes worth knowing before changing it:
+
+- **The client encodes 16 kHz mono WAV itself.** Browsers record different
+  containers (Chrome webm, Firefox ogg, Safari mp4) but the gateway labels
+  every upload `audio/wav`; capturing raw samples and writing a PCM16 WAV
+  (`src/lib/wav.ts`) gives one format everywhere, identical to the backend's
+  test fixtures.
+- **The client decides when an utterance ends.** The server has no VAD (one
+  binary frame = one utterance), so `src/lib/recorder.ts` auto-sends after
+  ~1.1s of silence following speech; tapping again sends immediately.
+- **Reply audio is buffered per track, then decoded.** The streamed chunks
+  are slices of one WAV (header only in the first), so nothing plays until a
+  track completes (`src/lib/player.ts`). Tapping the mic while the agent
+  speaks stops playback at once -- that is the client half of barge-in.
+- `src/lib/protocol.ts` mirrors the server's event shapes; change the wire
+  protocol and that file together.
+
+### The Gradio test harness (kept as the fallback UI)
+
+Deliberately retained, not deprecated: if the web UI ever misbehaves, `/ui`
+is a known-good interface over the same backend. The fastest way to
+actually feel the agent work. Two tabs: a text chat that
 behaves like a real caller typing instead of speaking (confirmation replies
 are interpreted the same way a voice call interprets "yes"/"no" — see
 `app/audio/confirmation.py` — not a permissive button), and an audio
@@ -567,12 +623,13 @@ services/gateway/            Railway container -- WebSocket, LangGraph, RAI
   app/graph/                  router, 4 agents, composer, extraction
   app/audio/                  /ws/call: AudioTransport, call_loop, confirmation
   app/guardrails/              input/output moderation -- patterns.py, moderation.py
-  app/ui/                      Gradio test harness, mounted at /ui
+  app/ui/                      Gradio test harness, mounted at /ui (fallback UI)
   app/providers/               OrderClient, LLMClient, ASRClient, TTSClient --
                                 each a real implementation + a mock, selected
                                 by whether credentials exist
   app/providers/cache.py       content-hash cache shared by ASR and TTS
   app/observability/           tracing, explainability, PII redaction/tokenization
+services/web/                React + TypeScript web UI, served by the gateway at /app
 scripts/eval_asr.py          ASR accuracy harness -- see fixtures/audio/README.md
 scripts/eval_fairness.py     bias/fairness harness -- see fixtures/fairness/README.md
 tests/                       runs against all of the above, offline, no deployment

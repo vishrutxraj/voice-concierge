@@ -25,3 +25,9 @@ data/checkpoints.db
 # Vercel's installCommand (services/order-api/vercel.json) copies this in at
 # build time -- packages/order-contracts stays the one source of truth.
 services/order-api/order_contracts/
+
+# Web UI (services/web): dependencies and build output are never committed;
+# the Dockerfile's node stage rebuilds dist from source.
+services/web/node_modules/
+services/web/dist/
+*.tsbuildinfo
