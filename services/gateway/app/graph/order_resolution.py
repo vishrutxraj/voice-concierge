@@ -21,30 +21,16 @@ Three outcomes, not two:
 
 from __future__ import annotations
 
-import re
 from dataclasses import dataclass
 
 from order_contracts.schemas import OrderSummary
 from rapidfuzz import fuzz, process
 
 from app.config import get_settings
+from app.graph.order_reference import normalize_spoken_id
 from app.providers.order_client import OrderClient
 
-# Loose separation-tolerance: callers say "D L V one zero zero two",
-# "DLV-1002", "delivery ten oh two" — normalize before scoring, not after.
-_NON_ALNUM = re.compile(r"[^A-Za-z0-9]+")
-
-_WORD_DIGITS = {
-    "zero": "0", "oh": "0", "one": "1", "two": "2", "to": "2", "too": "2",
-    "three": "3", "four": "4", "for": "4", "five": "5", "six": "6",
-    "seven": "7", "eight": "8", "nine": "9",
-}
-
-
-def _normalize(text: str) -> str:
-    words = text.lower().split()
-    digits_spoken = " ".join(_WORD_DIGITS.get(w, w) for w in words)
-    return _NON_ALNUM.sub("", digits_spoken).upper()
+_normalize = normalize_spoken_id
 
 
 @dataclass
@@ -60,11 +46,15 @@ def resolve_order_id(
     caller_phone: str,
     order_client: OrderClient,
     threshold: float | None = None,
+    open_orders: list[OrderSummary] | None = None,
 ) -> ResolutionResult:
+    """`open_orders` lets a caller that already fetched the list (ensure_order_id)
+    pass it in instead of triggering a second, unguarded network call."""
     settings = get_settings()
     threshold = threshold if threshold is not None else settings.order_id_fuzzy_threshold
 
-    open_orders: list[OrderSummary] = order_client.orders_for_phone(caller_phone)
+    if open_orders is None:
+        open_orders = order_client.orders_for_phone(caller_phone)
     if not open_orders:
         return ResolutionResult("not_found", None, 0.0, [])
 
@@ -105,6 +95,14 @@ def resolve_order_id(
     if best["score"] < threshold:
         return ResolutionResult("not_found", None, best["score"], scored)
 
+    # An exact match is not a "close call" however similar the runner-up looks.
+    # Real order IDs are sequential (DLV1001/1002/1003), so a caller saying the
+    # full, correct "DLV1003" still scores the neighbours ~0.92 -- inside the
+    # 0.08 margin below -- and used to be judged AMBIGUOUS, looping forever on
+    # the one input that should be the easiest to resolve.
+    if best["score"] >= 0.999 and second["score"] < 0.999:
+        return ResolutionResult("resolved", best["order_id"], best["score"], scored[:3])
+
     # A clear winner needs both to clear the floor AND to meaningfully beat
     # the runner-up — two similar order IDs at 0.74 and 0.72 is not a
     # confident match, it is a coin flip the agent should not make silently.
@@ -115,14 +113,23 @@ def resolve_order_id(
 
 
 def format_disambiguation_prompt(candidates: list[dict], order_client: OrderClient,
-                                  caller_phone: str) -> str:
+                                  caller_phone: str,
+                                  open_orders: list[OrderSummary] | None = None) -> str:
     """What the agent says when it can't silently pick one."""
-    summaries = {o.order_id: o for o in order_client.orders_for_phone(caller_phone)}
+    if open_orders is None:
+        open_orders = order_client.orders_for_phone(caller_phone)
+    summaries = {o.order_id: o for o in open_orders}
+    return format_options([summaries[c["order_id"]] for c in candidates if c["order_id"] in summaries][:3])
+
+
+def format_options(orders) -> str:
+    """The which-order question, over anything with items_preview and a status
+    (OrderSummary or order_reference.OrderRef). Options are read out in the
+    order given -- the caller's "the third one" refers to exactly this order."""
     lines = []
-    for c in candidates[:3]:
-        o = summaries.get(c["order_id"])
-        if o:
-            lines.append(f"your order for {o.items_preview} ({o.status.value})")
+    for o in orders:
+        status = o.status.value if hasattr(o.status, "value") else o.status
+        lines.append(f"your order for {o.items_preview} ({status})")
     if not lines:
         return "Which order are you calling about?"
     if len(lines) == 1:

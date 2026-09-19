@@ -7,6 +7,9 @@ frame is one whole utterance rather than a raw stream):
   client -> server
     binary frame   one complete utterance's audio bytes
     {"type": "hangup"}   end the call cleanly
+    {"type": "set_audio", "audio": "native" | "english" | "both"}
+                         which reply audio to hear; also accepted as "audio"
+                         on the initial start message. Text is always both.
 
   server -> client
     {"type": ...}        control/status events, see call_loop.py for the set
@@ -26,7 +29,7 @@ from typing import Any
 from fastapi import WebSocket
 from starlette.websockets import WebSocketDisconnect, WebSocketState
 
-from app.audio.transport import AudioTransport
+from app.audio.transport import AUDIO_PREFERENCES, AudioTransport
 
 logger = logging.getLogger("concierge.audio")
 
@@ -55,6 +58,12 @@ class WebSocketAudioTransport(AudioTransport):
                     continue
                 if payload.get("type") == "hangup":
                     return None
+                if payload.get("type") == "set_audio":
+                    # Invalid values are ignored, not fatal -- same
+                    # forgiving stance as the unrecognized-message case below.
+                    if payload.get("audio") in AUDIO_PREFERENCES:
+                        self.audio_preference = payload["audio"]
+                    continue
                 # Anything else (keepalive, unrecognized control message) is
                 # ignored -- keep listening for the next real utterance.
                 continue

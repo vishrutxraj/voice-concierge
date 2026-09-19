@@ -34,6 +34,15 @@ def compose(state: CallState) -> dict:
     reply = state.get("agent_reply", "")
     escalated = state.get("escalated", False)
 
+    if not reply:
+        # The composer fires as soon as sentiment_monitor or input_guardrail
+        # finishes -- the same superstep the domain agent is still running in --
+        # and again after the agent writes. This is the first firing: there is
+        # nothing to compose yet, and publishing anything would be stale (see
+        # runner.py). A turn whose agent pauses at interrupt() correctly ends
+        # with reply_text == "" and the caller reads the interrupt's prompt.
+        return {}
+
     if escalated and "colleague" not in reply.lower() and "human" not in reply.lower():
         reply = (
             f"{reply} I'm also going to have a colleague follow up with you "

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from app.graph.dialogue import new_pending
 from app.graph.nodes.input_guardrail import guardrail_block_patch
 from app.graph.nodes.order_identify import ensure_order_id
 from app.graph.state import CallState
@@ -40,7 +41,12 @@ def order_lookup(state: CallState) -> dict:
           data={"order_id": order.order_id, "status": order.status.value})
 
     reply = _compose_reply(order)
-    return {**outcome.state_patch, "agent_reply": reply}
+    patch = {**outcome.state_patch, "agent_reply": reply}
+    if order.status.value == "failed_attempt":
+        # _compose_reply just asked "Would you like to reschedule?" -- a bare
+        # "yes please" must route to reschedule, not be classified cold.
+        patch["pending_followup"] = new_pending(state, intent="reschedule", kind="offer")
+    return patch
 
 
 def _compose_reply(order) -> str:

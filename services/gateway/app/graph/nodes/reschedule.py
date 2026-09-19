@@ -17,6 +17,7 @@ from __future__ import annotations
 
 from langgraph.types import Command, interrupt
 
+from app.graph.dialogue import new_pending
 from app.graph.extraction import extract_slot
 from app.graph.nodes.input_guardrail import guardrail_block_patch
 from app.graph.nodes.order_identify import ensure_order_id
@@ -56,6 +57,8 @@ def reschedule(state: CallState) -> dict:
             **outcome.state_patch,
             "agent_reply": f"Sure — what day works, and morning, afternoon, or evening? "
                           f"I still need {missing}.",
+            # The reply to this is a bare date/time -- tell the router.
+            "pending_followup": new_pending(state, intent="reschedule", kind="slot"),
         }
 
     client = get_order_client()
@@ -102,6 +105,7 @@ def reschedule(state: CallState) -> dict:
             **outcome.state_patch,
             "agent_reply": "No problem — what date and time would work better?",
             "pending_confirmation": None,
+            "pending_followup": new_pending(state, intent="reschedule", kind="slot"),
         }
 
     idem_key = OrderClient.new_idempotency_key(session_id, "reschedule")

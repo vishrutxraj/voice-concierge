@@ -66,6 +66,30 @@ class CallState(TypedDict, total=False):
     order_id_confidence: float | None
     candidate_orders: list[dict]  # ambiguous matches the caller must disambiguate
 
+    # Dialogue memory: "I asked which order and I'm waiting for the answer."
+    # Written ONLY by ensure_order_id (order_identify.py) and fallback -- both
+    # run inside a single domain-agent node per turn, so one writer per
+    # superstep (rule 4). READ by the router, which uses it to recognise a bare
+    # reply like "yoga mat" as the answer to our question instead of
+    # classifying it cold (where it scores as gibberish and escalates).
+    #   {"intent": "order_lookup" | "reschedule" | "address_change",
+    #    "candidates": [OrderRef.to_dict(), ...],   # in the order READ OUT, so
+    #                                               # "the third one" is well-defined
+    #    "retries": int,                            # unclear answers so far
+    #    "at_turn": int}                            # live only on the NEXT turn
+    #                                               # (see graph/dialogue.py)
+    pending_disambiguation: dict | None
+    # Same idea for non-order questions: "what day works?" (kind="slot") or
+    # "would you like to reschedule?" (kind="offer"). Written by
+    # order_lookup/reschedule/address_change/fallback, read by the router.
+    #   {"intent": <task to continue>, "kind": "slot" | "offer", "at_turn": int}
+    pending_followup: dict | None
+    # The caller's open orders as fetched once per session (OrderRef dicts).
+    # Lets later turns recognise a reference to a DIFFERENT order ("what about
+    # the speaker?") without another network call. Identification only -- every
+    # agent still fetches the order itself fresh before reporting on it.
+    order_snapshot: list[dict]
+
     # Mutation-in-progress (reschedule / address) awaiting interrupt() confirmation
     pending_confirmation: dict | None
 

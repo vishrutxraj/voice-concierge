@@ -26,6 +26,7 @@ import uuid
 from dataclasses import dataclass
 
 from app.audio.confirmation import interpret_confirmation
+from app.audio.localize import LocalizedReply, audio_tracks, localize_reply
 from app.graph.runner import run_turn
 from app.observability.trace import get_sink
 from app.providers.asr_client import ASRUnavailable, get_asr_client
@@ -40,11 +41,16 @@ def new_session_id() -> str:
 
 @dataclass
 class TurnOutcome:
-    reply_text: str
+    reply_text: str  # English -- what the graph composed
     intent: str | None
     escalated: bool
     awaiting_confirmation: dict | None
     error: str | None = None
+    # The same reply in the caller's language; None when no translation
+    # applied (English caller, unsupported language, or translation down).
+    localized_text: str | None = None
+    reply_language: str | None = None  # TTS language code of localized_text
+    localized: LocalizedReply | None = None  # full result, reused for TTS
 
 
 def _dispatch(
@@ -55,7 +61,26 @@ def _dispatch(
     pending_confirmation: dict | None,
 ) -> TurnOutcome:
     """Shared tail end of both run_text_turn and run_audio_turn, once each has
-    its own utterance text (typed, or transcribed)."""
+    its own utterance text (typed, or transcribed). Adds the caller's-language
+    rendering of the reply at the very end, so it also covers the fixed
+    "yes or a no" re-ask below."""
+    outcome = _run(session_id, caller_phone, utterance, language, pending_confirmation)
+    if outcome.reply_text:
+        localized = localize_reply(outcome.reply_text, language, session_id)
+        outcome.localized = localized
+        if localized.translated:
+            outcome.localized_text = localized.text
+            outcome.reply_language = localized.language
+    return outcome
+
+
+def _run(
+    session_id: str,
+    caller_phone: str,
+    utterance: str,
+    language: str,
+    pending_confirmation: dict | None,
+) -> TurnOutcome:
     resume_value = None
     if pending_confirmation is not None:
         resume_value = interpret_confirmation(utterance)
@@ -86,8 +111,11 @@ def run_text_turn(
     caller_phone: str,
     text: str,
     pending_confirmation: dict | None = None,
+    language: str = "en-IN",
 ) -> TurnOutcome:
-    return _dispatch(session_id, caller_phone, text, "en-IN", pending_confirmation)
+    """`language` is the caller's language for THIS typed chat -- text has no
+    ASR to detect it, so the UI lets the tester pick one to see translation."""
+    return _dispatch(session_id, caller_phone, text, language, pending_confirmation)
 
 
 @dataclass
@@ -95,7 +123,16 @@ class AudioTurnOutcome:
     transcript: str
     detected_language: str | None
     turn: TurnOutcome
-    reply_audio_bytes: bytes | None = None
+    audio_english: bytes | None = None
+    audio_native: bytes | None = None  # same bytes as english when untranslated
+
+    @property
+    def reply_audio_bytes(self) -> bytes | None:
+        """The caller's-language audio if there is one, else English."""
+        return self.audio_native or self.audio_english
+
+
+HEAR_CHOICES = ("native", "english", "both")
 
 
 def run_audio_turn(
@@ -103,13 +140,15 @@ def run_audio_turn(
     caller_phone: str,
     audio_bytes: bytes,
     pending_confirmation: dict | None = None,
+    hear: str = "native",
 ) -> AudioTurnOutcome:
     """
     One-shot ASR -> run_turn -> TTS -- the single-turn shape of
     app/audio/call_loop.py's orchestration, so a developer can upload or
     record one WAV, see the transcript and reply, hear the synthesized
     audio, and inspect the explain trail without standing up a WebSocket
-    client.
+    client. `hear` picks which renderings get synthesized ("native",
+    "english", "both") -- same semantics as the WebSocket's audio preference.
     """
     try:
         asr_result = get_asr_client().transcribe(audio_bytes)
@@ -122,18 +161,25 @@ def run_audio_turn(
 
     language = asr_result.detected_language or "en-IN"
     turn = _dispatch(session_id, caller_phone, asr_result.text, language, pending_confirmation)
+    outcome = AudioTurnOutcome(
+        transcript=asr_result.text, detected_language=asr_result.detected_language, turn=turn,
+    )
 
-    reply_audio_bytes: bytes | None = None
-    if turn.reply_text and turn.error is None:
+    if turn.localized is not None and turn.error is None:
+        localized = turn.localized
         try:
-            reply_audio_bytes = get_tts_client().synthesize(turn.reply_text, language).audio_bytes
+            for track in audio_tracks(localized, hear):
+                audio = get_tts_client().synthesize(track.text, track.language).audio_bytes
+                if track.variant == "english":
+                    outcome.audio_english = audio
+                else:
+                    outcome.audio_native = audio
         except TTSUnavailable as exc:
             turn.error = f"TTS unavailable: {exc}"
+        if not localized.translated:
+            outcome.audio_native = outcome.audio_english
 
-    return AudioTurnOutcome(
-        transcript=asr_result.text, detected_language=asr_result.detected_language,
-        turn=turn, reply_audio_bytes=reply_audio_bytes,
-    )
+    return outcome
 
 
 def get_explain(session_id: str) -> dict:

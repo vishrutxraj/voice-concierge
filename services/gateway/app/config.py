@@ -74,8 +74,15 @@ class Settings(BaseSettings):
     sarvam_tts_speaker_dev: str = "shubh"  # bulbul:v3 default
     sarvam_tts_speaker_demo: str = "shubh"  # bulbul:v3 default
 
+    # Translate (English reply -> caller's language). Verified against
+    # docs.sarvam.ai (2026-09): sarvam-translate:v1 covers all 22 languages
+    # (mayura:v1 only 11) but only supports mode="formal".
+    sarvam_translate_model: str = "sarvam-translate:v1"
+    sarvam_translate_mode: str = "formal"
+
     # ---- Provider selection -------------------------------------------
     asr_provider: str = "sarvam"  # sarvam | groq | mock
+    translate_provider: str = "sarvam"  # sarvam | mock
     tts_provider: str = "sarvam"  # sarvam | piper | mock
     llm_provider: str = "groq"  # groq | mock
 
@@ -85,6 +92,12 @@ class Settings(BaseSettings):
     order_api_base_url: str = ""
     sarvam_base_url: str = "https://api.sarvam.ai"
     groq_base_url: str = "https://api.groq.com/openai/v1"
+
+    # Built React UI (services/web -> `npm run build`). Empty means "look in
+    # the default places" (see app/main.py::find_web_dist); the Docker image
+    # sets this explicitly. Absent dist is fine -- /app just isn't mounted and
+    # the Gradio harness at /ui remains the fallback UI.
+    web_dist_dir: str = ""
 
     # ---- Persistence ---------------------------------------------------
     # SQLite by default so the whole thing runs with no database service.
@@ -189,7 +202,10 @@ def validate_roster(settings: Settings | None = None) -> dict[str, list[str]]:
     else:
         # Sarvam has no public /models listing; model IDs are validated by
         # first use. Recorded as ok so the report shape stays consistent.
-        report["ok"].extend([settings.sarvam_asr_model, settings.sarvam_tts_model])
+        report["ok"].extend([
+            settings.sarvam_asr_model, settings.sarvam_tts_model,
+            settings.sarvam_translate_model,
+        ])
 
     if report["missing"]:
         raise RosterValidationError(

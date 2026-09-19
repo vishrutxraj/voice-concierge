@@ -18,6 +18,7 @@ from pathlib import Path
 
 import gradio as gr
 
+from app.audio.localize import DEFAULT_LANGUAGE, LANGUAGE_NAMES, language_name
 from app.config import get_settings
 from app.ui.harness import (
     TurnOutcome,
@@ -45,8 +46,27 @@ def _write_temp_wav(data: bytes) -> str:
     return f.name
 
 
-def _append_chat(history: list[dict], user_text: str, outcome: TurnOutcome) -> list[dict]:
+LANGUAGE_CHOICES = [(f"{name} ({code})", code) for code, name in LANGUAGE_NAMES.items()]
+HEAR_LABELS = [
+    ("Detected language", "native"),
+    ("English", "english"),
+    ("Both (detected language, then English)", "both"),
+]
+
+
+def _format_reply(outcome: TurnOutcome) -> str:
+    """English first (it's what the agent actually composed), then the caller's
+    language when one was applied. Both are always shown, regardless of which
+    one the user chooses to hear."""
     reply = outcome.reply_text or "(no reply -- see Explain panel for why)"
+    if outcome.localized_text:
+        lang = language_name(outcome.reply_language)
+        reply = f"**English**\n{reply}\n\n**{lang}**\n{outcome.localized_text}"
+    return reply
+
+
+def _append_chat(history: list[dict], user_text: str, outcome: TurnOutcome) -> list[dict]:
+    reply = _format_reply(outcome)
     if outcome.error:
         reply = f"{reply}\n\n⚠️ {outcome.error}"
     return history + [
@@ -85,6 +105,11 @@ def build_demo() -> gr.Blocks:
             new_session_btn = gr.Button("New session", scale=1)
 
         with gr.Tab("Text chat"):
+            chat_language = gr.Dropdown(
+                choices=LANGUAGE_CHOICES, value=DEFAULT_LANGUAGE, label="Caller language",
+                info="Typed chat has no speech to detect a language from -- pick one "
+                     "to see each reply in English AND that language.",
+            )
             chatbot = gr.Chatbot(type="messages", label="Conversation", height=360)
             with gr.Row():
                 msg_box = gr.Textbox(
@@ -100,12 +125,23 @@ def build_demo() -> gr.Blocks:
                 "path `/ws/call` uses. See `app/audio/call_loop.py` for that."
             )
             audio_in = gr.Audio(sources=["microphone", "upload"], type="filepath", label="Say something")
+            hear_radio = gr.Radio(
+                choices=HEAR_LABELS, value="native", label="Language to hear",
+                info="Replies are always shown in both languages; this picks which "
+                     "one is spoken (and only that one is synthesized).",
+            )
             send_audio_btn = gr.Button("Send audio", variant="primary")
             with gr.Row():
-                transcript_box = gr.Textbox(label="Transcript (what ASR heard)", interactive=False)
+                transcript_box = gr.Textbox(label="Transcript (what ASR heard, in English)", interactive=False)
                 language_box = gr.Textbox(label="Detected language", interactive=False)
-            reply_box = gr.Textbox(label="Reply text", interactive=False)
-            reply_audio = gr.Audio(label="Reply audio", type="filepath", interactive=False)
+            with gr.Row():
+                reply_box_en = gr.Textbox(label="Reply — English", interactive=False)
+                reply_box_native = gr.Textbox(label="Reply — detected language", interactive=False)
+            with gr.Row():
+                reply_audio_en = gr.Audio(label="🔊 English", type="filepath", interactive=False)
+                reply_audio_native = gr.Audio(
+                    label="🔊 Detected language", type="filepath", interactive=False,
+                )
 
         explain_json = gr.JSON(label="Explain trail (GET /api/sessions/{id}/explain)")
 
@@ -118,43 +154,68 @@ def build_demo() -> gr.Blocks:
             outputs=[session_id_state, session_box, chatbot, pending_confirmation_state, explain_json],
         )
 
-        def on_send(session_id, phone, message, pending, history):
+        def on_send(session_id, phone, message, pending, history, language):
             if not message or not message.strip():
                 return history, "", pending, gr.update()
-            outcome = run_text_turn(session_id, phone, message, pending)
+            outcome = run_text_turn(session_id, phone, message, pending, language)
             history = _append_chat(history, message, outcome)
             return history, "", outcome.awaiting_confirmation, get_explain(session_id)
 
         send_btn.click(
             on_send,
-            inputs=[session_id_state, phone_box, msg_box, pending_confirmation_state, chatbot],
+            inputs=[
+                session_id_state, phone_box, msg_box, pending_confirmation_state,
+                chatbot, chat_language,
+            ],
             outputs=[chatbot, msg_box, pending_confirmation_state, explain_json],
         )
         msg_box.submit(
             on_send,
-            inputs=[session_id_state, phone_box, msg_box, pending_confirmation_state, chatbot],
+            inputs=[
+                session_id_state, phone_box, msg_box, pending_confirmation_state,
+                chatbot, chat_language,
+            ],
             outputs=[chatbot, msg_box, pending_confirmation_state, explain_json],
         )
 
-        def on_send_audio(session_id, phone, audio_path, pending):
+        def on_send_audio(session_id, phone, audio_path, pending, hear):
             if not audio_path:
-                return "", "", "", None, pending, gr.update()
+                return "", "", "", gr.update(), None, gr.update(), pending, gr.update()
             audio_bytes = Path(audio_path).read_bytes()
-            result = run_audio_turn(session_id, phone, audio_bytes, pending)
-            reply_path = _write_temp_wav(result.reply_audio_bytes) if result.reply_audio_bytes else None
-            reply_text = result.turn.reply_text
-            if result.turn.error:
-                reply_text = f"{reply_text}\n\n⚠️ {result.turn.error}"
+            result = run_audio_turn(session_id, phone, audio_bytes, pending, hear)
+            turn = result.turn
+            translated = turn.localized_text is not None
+            en_text = turn.reply_text
+            if turn.error:
+                en_text = f"{en_text}\n\n⚠️ {turn.error}"
+            native_lang = language_name(turn.reply_language or result.detected_language)
+
+            # Autoplay whichever the user chose to hear first. In "both" the
+            # detected language plays automatically and English sits ready
+            # beside it -- two players autoplaying at once would talk over
+            # each other.
+            play_english = hear == "english" or not translated
+            en_path = _write_temp_wav(result.audio_english) if result.audio_english else None
+            native_path = (
+                _write_temp_wav(result.audio_native)
+                if translated and result.audio_native else None
+            )
             return (
-                result.transcript, result.detected_language or "", reply_text, reply_path,
-                result.turn.awaiting_confirmation, get_explain(session_id),
+                result.transcript, result.detected_language or "", en_text,
+                gr.update(value=turn.localized_text or "", visible=translated,
+                          label=f"Reply — {native_lang}"),
+                gr.Audio(value=en_path, autoplay=play_english, label="🔊 English"),
+                gr.Audio(value=native_path, autoplay=not play_english, visible=translated,
+                         label=f"🔊 {native_lang}"),
+                turn.awaiting_confirmation, get_explain(session_id),
             )
 
         send_audio_btn.click(
             on_send_audio,
-            inputs=[session_id_state, phone_box, audio_in, pending_confirmation_state],
+            inputs=[session_id_state, phone_box, audio_in, pending_confirmation_state, hear_radio],
             outputs=[
-                transcript_box, language_box, reply_box, reply_audio,
+                transcript_box, language_box, reply_box_en, reply_box_native,
+                reply_audio_en, reply_audio_native,
                 pending_confirmation_state, explain_json,
             ],
         )

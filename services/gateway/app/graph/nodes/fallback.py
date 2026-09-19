@@ -25,10 +25,14 @@ def fallback(state: CallState) -> dict:
     )
 
     if already_escalated:
-        # An upstream node (order_identify, reschedule, address) already set a
-        # specific reply_text and escalation_reason — don't overwrite it with
-        # a generic message.
-        return {}
+        # A handoff already happened earlier in this session. Say so plainly
+        # rather than repeating the generic "let me connect you" line -- this
+        # path used to return {} and lean on the previous turn's leftover
+        # agent_reply, which no longer survives across turns (see runner.py).
+        return {
+            "agent_reply": "I've already asked a colleague to help with this — "
+                           "they'll follow up with you shortly.",
+        }
 
     trace(session_id, EventKind.ESCALATION, "fallback", "unclassified_or_out_of_scope")
     return {
@@ -36,4 +40,7 @@ def fallback(state: CallState) -> dict:
                       "connect you with a colleague who can take it from here.",
         "escalated": True,
         "escalation_reason": "unclassified_or_out_of_scope",
+        # A caller handed to a human is no longer answering our question.
+        "pending_disambiguation": None,
+        "pending_followup": None,
     }

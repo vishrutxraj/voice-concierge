@@ -26,7 +26,17 @@ class TransportClosed(Exception):
     """Raised by any AudioTransport method once the caller has disconnected."""
 
 
+AUDIO_PREFERENCES = ("native", "english", "both")
+
+
 class AudioTransport(ABC):
+    # Which reply audio the caller wants to HEAR: their own language, English,
+    # or both back to back. Text always carries both (reply event's `text` and
+    # `text_en`); this only decides which TTS renderings get synthesized and
+    # streamed, so an unwanted one costs no TTS call and no bandwidth. Read by
+    # call_loop at delivery time, so a mid-call change applies to the next reply.
+    audio_preference: str = "native"
+
     @abstractmethod
     async def receive_utterance(self) -> bytes | None:
         """

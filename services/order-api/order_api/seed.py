@@ -171,6 +171,25 @@ _SPEC = [
     ("DLV1020", "9990000018", "Suresh Babu", OrderStatus.OUT_FOR_DELIVERY,
      ("45 RS Puram", "Coimbatore", "Tamil Nadu", "641002", None, None),
      (T(0), SlotWindow.MORNING), 0, 0, True, ["Pressure cooker"]),
+    # --- more multi-order callers, so "which order?" has more to disambiguate --
+    # (dates/slots deliberately avoid T(3)/MORNING and the blackout dates, which
+    # tests rely on being saturated / blocked)
+    ("DLV1021", "9990000019", "Karan Malhotra", OrderStatus.IN_TRANSIT,
+     ("Flat 12, Hiranandani", "Mumbai", "Maharashtra", "400076", None, None),
+     (T(2), SlotWindow.AFTERNOON), 0, 0, False, ["Laptop sleeve"]),
+    ("DLV1022", "9990000019", "Karan Malhotra", OrderStatus.PENDING,
+     ("Flat 12, Hiranandani", "Mumbai", "Maharashtra", "400076", None, None),
+     (T(4), SlotWindow.MORNING), 0, 0, False, ["Wireless mouse"]),
+    # Divya has TWO pending orders: "the pending one" is genuinely ambiguous.
+    ("DLV1023", "9990000020", "Divya Krishnan", OrderStatus.OUT_FOR_DELIVERY,
+     ("8 Koramangala 5th Block", "Bengaluru", "Karnataka", "560095", None, None),
+     (T(0), SlotWindow.MORNING), 0, 0, True, ["Ceramic vase"]),
+    ("DLV1024", "9990000020", "Divya Krishnan", OrderStatus.PENDING,
+     ("8 Koramangala 5th Block", "Bengaluru", "Karnataka", "560095", None, None),
+     (T(6), SlotWindow.AFTERNOON), 0, 0, False, ["Bookshelf"]),
+    ("DLV1025", "9990000020", "Divya Krishnan", OrderStatus.PENDING,
+     ("8 Koramangala 5th Block", "Bengaluru", "Karnataka", "560095", None, None),
+     (T(7), SlotWindow.EVENING), 0, 0, False, ["Cushion covers"]),
 ]
 
 

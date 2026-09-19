@@ -1,10 +1,11 @@
 """
 Service entrypoint.
 
-Mounts three things on one ASGI app:
+Mounts these on one ASGI app:
   * /ws/call          voice gateway (phase 4)
   * /api/sessions/*   observability, explainability, and data-subject rights
-  * /ui               Gradio test harness (phase 6)
+  * /app              React web UI (services/web), when built
+  * /ui               Gradio test harness (phase 6) -- the fallback UI
 
 The order API is NOT mounted here — it runs on Vercel as its own serverless
 service (services/order-api). The gateway reaches it through OrderClient, which
@@ -20,13 +21,17 @@ from __future__ import annotations
 import logging
 import uuid
 from contextlib import asynccontextmanager
+from pathlib import Path
 
 import gradio as gr
 from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect, status
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, RedirectResponse
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 from app.audio.call_loop import run_call
+from app.audio.localize import localize_reply
+from app.audio.transport import AUDIO_PREFERENCES
 from app.audio.websocket_transport import WebSocketAudioTransport
 from app.config import RosterValidationError, ensure_dirs, get_settings, validate_roster
 from app.graph.runner import forget_vault, run_turn
@@ -80,7 +85,11 @@ class TurnRequest(BaseModel):
 
 class TurnResponse(BaseModel):
     session_id: str
-    reply_text: str
+    reply_text: str  # English, always
+    # Same reply in the request's `language`; null for English or when
+    # translation isn't possible (see app/audio/localize.py's fallbacks).
+    reply_text_localized: str | None = None
+    reply_language: str | None = None
     awaiting_confirmation: dict | None = None
     intent: str | None = None
     escalated: bool = False
@@ -102,9 +111,15 @@ def call_turn(payload: TurnRequest) -> TurnResponse:
         resume_value=payload.resume,
     )
     router = result.state.get("router") or {}
+    # A turn paused at interrupt() has no reply_text; its read-back prompt is
+    # what the caller needs to see (same fallback call_loop and the harness use).
+    english = result.reply_text or (result.awaiting_confirmation or {}).get("prompt", "")
+    localized = localize_reply(english, payload.language, payload.session_id) if english else None
     return TurnResponse(
         session_id=payload.session_id,
         reply_text=result.reply_text,
+        reply_text_localized=localized.text if localized and localized.translated else None,
+        reply_language=localized.language if localized and localized.translated else None,
         awaiting_confirmation=result.awaiting_confirmation,
         intent=router.get("intent"),
         escalated=result.state.get("escalated", False),
@@ -120,7 +135,8 @@ async def ws_call(websocket: WebSocket) -> None:
     4 note that the graph itself never changes.
 
     Handshake: the first message must be a JSON text frame
-      {"type": "start", "session_id"?, "caller_phone"?, "transport_kind"?}
+      {"type": "start", "session_id"?, "caller_phone"?, "transport_kind"?,
+       "audio"?: "native" | "english" | "both"}
     session_id is generated when omitted -- a first-time browser caller has
     no session yet. Everything after that is the call_loop wire protocol
     documented in app/audio/websocket_transport.py.
@@ -137,6 +153,8 @@ async def ws_call(websocket: WebSocket) -> None:
 
     session_id = start.get("session_id") or uuid.uuid4().hex
     transport = WebSocketAudioTransport(websocket)
+    if start.get("audio") in AUDIO_PREFERENCES:
+        transport.audio_preference = start["audio"]
     await transport.send_event({"type": "ready", "session_id": session_id})
 
     await run_call(
@@ -196,6 +214,40 @@ def forget_session(session_id: str) -> dict:
     """Right to erasure. Drops all retained trace data AND the in-memory PII vault."""
     forget_vault(session_id)
     return {"session_id": session_id, "erased": get_sink().forget(session_id)}
+
+
+# --------------------------------------------------------------------------
+# Web UI (services/web, React) at /app. Served from the gateway itself so the
+# browser sees ONE origin: the WebSocket, the explain API and the page all
+# share it -- no CORS, no second deploy. The Gradio harness below is kept
+# deliberately as a working fallback UI; this mount is skipped (not an error)
+# when the frontend hasn't been built, so a Python-only checkout still boots.
+# --------------------------------------------------------------------------
+
+
+_DEFAULT_WEB_DIST = Path(__file__).resolve().parents[2] / "web" / "dist"
+
+
+def find_web_dist() -> Path | None:
+    """The built frontend, or None. Explicit setting wins; else the
+    repo-relative build output (services/web/dist) used in local dev."""
+    configured = get_settings().web_dist_dir
+    candidates = [Path(configured)] if configured else []
+    candidates.append(_DEFAULT_WEB_DIST)
+    for path in candidates:
+        if (path / "index.html").is_file():
+            return path
+    return None
+
+
+_web_dist = find_web_dist()
+if _web_dist is not None:
+    app.mount("/app", StaticFiles(directory=_web_dist, html=True), name="web")
+
+
+@app.get("/", include_in_schema=False)
+def root() -> RedirectResponse:
+    return RedirectResponse("/app/" if _web_dist is not None else "/ui/")
 
 
 # --------------------------------------------------------------------------

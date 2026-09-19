@@ -27,6 +27,7 @@ from __future__ import annotations
 
 from langgraph.types import interrupt
 
+from app.graph.dialogue import new_pending
 from app.graph.extraction import extract_address
 from app.graph.nodes.input_guardrail import guardrail_block_patch
 from app.graph.nodes.order_identify import ensure_order_id
@@ -121,6 +122,7 @@ def address_change(state: CallState) -> dict:
             **outcome.state_patch,
             "agent_reply": "No problem — could you say the correct address again?",
             "pending_confirmation": None,
+            "pending_followup": new_pending(state, intent="address_change", kind="slot"),
         }
 
     idem_key = OrderClient.new_idempotency_key(session_id, "address_change")

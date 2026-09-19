@@ -95,6 +95,21 @@ def run_turn(
                 "language": language,
                 "transport_kind": transport_kind,
                 "last_utterance": tokenized.text,
+                # agent_reply / reply_text are per-TURN outputs but checkpointed
+                # like every other key, so they used to carry over from the
+                # previous turn. The composer also runs EARLY in the same
+                # superstep as the domain agent (sentiment_monitor and
+                # input_guardrail each have their own edge into it), reading
+                # whatever agent_reply is there. On a turn that then pauses at
+                # interrupt() (a reschedule/address read-back) the agent never
+                # answers, so the early composer run published LAST turn's reply
+                # -- and call_loop / the Gradio harness, which prefer reply_text
+                # over the interrupt's prompt, spoke the old line instead of the
+                # confirmation question. Invisible on a session's first turn
+                # (nothing stale yet), which is why single-turn tests missed it.
+                # Start every turn blank; composer ignores a blank agent_reply.
+                "agent_reply": "",
+                "reply_text": "",
                 "turns": [{"role": "caller", "text": tokenized.text, "ts": time.time()}],
                 "pii_vault": vault,
             }

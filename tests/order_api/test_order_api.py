@@ -43,7 +43,7 @@ def _resched(order_id: str, day, window, key="k1"):
 def test_health_reports_backend():
     body = client.get("/api/health").json()
     assert body["status"] == "ok"
-    assert body["orders"] == 20
+    assert body["orders"] == 25
 
 
 def test_get_order_returns_full_wms_shape():

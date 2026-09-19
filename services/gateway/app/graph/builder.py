@@ -91,9 +91,15 @@ def build_graph() -> StateGraph:
         },
     )
 
-    # Domain agents and sentiment_monitor all fan in to composer. LangGraph
-    # waits for every incoming edge before running a node, so composer only
-    # fires once both the chosen agent AND sentiment_monitor have finished.
+    # Domain agents and sentiment_monitor all feed composer. NOTE: these are
+    # separate edges, which LangGraph treats as "run when ANY of them fires",
+    # NOT "wait for all" (that needs add_edge([a, b], "composer"), which would
+    # deadlock here since only one agent ever runs). So composer runs TWICE per
+    # turn: early, in the same superstep as the agent (triggered by
+    # sentiment_monitor / input_guardrail), and again once the agent has
+    # written agent_reply. The early run must therefore be a no-op -- see
+    # nodes/composer.py -- and agent_reply is cleared at the start of every turn
+    # (runner.py) so it can never publish a previous turn's reply.
     for node in ("order_lookup", "reschedule", "address_change", "fallback"):
         graph.add_edge(node, "composer")
     graph.add_edge("sentiment_monitor", "composer")

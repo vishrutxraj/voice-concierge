@@ -33,6 +33,7 @@ import logging
 from dataclasses import dataclass, field
 
 from app.audio.confirmation import interpret_confirmation
+from app.audio.localize import LocalizedReply, audio_tracks, localize_reply
 from app.audio.transport import AudioTransport
 from app.config import get_settings
 from app.graph.runner import run_turn
@@ -205,7 +206,28 @@ async def _deliver(
 ) -> None:
     """Send the text reply event, then stream its TTS audio -- checking for
     barge-in (still_current) between every outbound chunk."""
-    await transport.send_event({"type": "reply", "text": text, **event_fields})
+    # Everything upstream is English (the graph reasons in English, and the
+    # fixed fallback lines above are too); translate here, at the edge, so the
+    # caller reads and hears their own language. `text` in the event is the
+    # localized reply; `text_en` keeps the original for the UI and logs.
+    if text:
+        localized = await asyncio.to_thread(
+            localize_reply, text, session.pinned_language, session.session_id
+        )
+    else:
+        localized = LocalizedReply("", "", session.pinned_language or "en-IN", translated=False)
+    if not still_current():
+        return
+
+    tracks = audio_tracks(localized, transport.audio_preference) if text else []
+    await transport.send_event({
+        # `text` is the caller's-language reply (== English for an English
+        # caller or a fallback); `text_en` is always the English original, so
+        # a client can show both. `audio` lists which renderings will follow.
+        "type": "reply", "text": localized.text, "text_en": localized.text_en,
+        "language": localized.language, "audio": [t.variant for t in tracks],
+        **event_fields,
+    })
     if not still_current():
         return
     if not text:
@@ -215,28 +237,36 @@ async def _deliver(
         await transport.send_event({"type": "audio_end"})
         return
 
-    try:
-        tts_result = await asyncio.to_thread(
-            get_tts_client().synthesize, text, session.pinned_language or "en-IN"
-        )
-    except TTSUnavailable as exc:
-        trace(session.session_id, EventKind.ERROR, "call_loop", "tts_unavailable",
-              data={"error": str(exc), "note": _TTS_FAILED_NOTE})
-        if still_current():
-            await transport.send_event({"type": "error", "detail": "tts_unavailable"})
-        return
-
-    if not still_current():
-        return
-
     chunk_size = get_settings().ws_audio_chunk_bytes
-    audio = tts_result.audio_bytes
-    for offset in range(0, len(audio), chunk_size):
-        if not still_current():
-            trace(session.session_id, EventKind.DECISION, "call_loop", "barge_in",
-                  reasoning="new caller audio arrived while streaming a reply")
-            await transport.send_event({"type": "barge_in"})
+    for track in tracks:
+        try:
+            tts_result = await asyncio.to_thread(
+                get_tts_client().synthesize, track.text, track.language
+            )
+        except TTSUnavailable as exc:
+            trace(session.session_id, EventKind.ERROR, "call_loop", "tts_unavailable",
+                  data={"error": str(exc), "note": _TTS_FAILED_NOTE, "track": track.variant})
+            if still_current():
+                await transport.send_event({"type": "error", "detail": "tts_unavailable"})
             return
-        await transport.send_audio_chunk(audio[offset:offset + chunk_size])
+
+        if not still_current():
+            return
+
+        if len(tracks) > 1:
+            # Only in "both" mode: tells the client where one rendering ends
+            # and the next begins inside the single binary stream.
+            await transport.send_event({
+                "type": "audio_track", "variant": track.variant, "language": track.language,
+            })
+
+        audio = tts_result.audio_bytes
+        for offset in range(0, len(audio), chunk_size):
+            if not still_current():
+                trace(session.session_id, EventKind.DECISION, "call_loop", "barge_in",
+                      reasoning="new caller audio arrived while streaming a reply")
+                await transport.send_event({"type": "barge_in"})
+                return
+            await transport.send_audio_chunk(audio[offset:offset + chunk_size])
 
     await transport.send_event({"type": "audio_end"})
